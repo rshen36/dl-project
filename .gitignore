@@ -87,3 +87,11 @@ ENV/
 
 # Rope project settings
 .ropeproject
+
+# PyCharm
+*.iml
+*.xml
+
+# Emacs
+*~
+.*~
