@@ -14,7 +14,7 @@ except:
 # TODO: figure out how to use/nuances of Redis
 import redis   # should I use Redis?
 
-logger = logging.getLogger(__name__)   # __name__ ???
+logger = logging.getLogger(__name__)
 
 # ???
 EXP_KEY = 'es:exp'
@@ -104,7 +104,6 @@ class RelayClient:
     Receives and stores task broadcasts from the master
     Batches and pushes results from worker to master
     """
-
     def __init__(self, master_redis_cfg, relay_redis_cfg):
         self.master_redis = retry_connect(master_redis_cfg)
         logger.info('[relay] Connected to master: {}'.format(self.master_redis))
