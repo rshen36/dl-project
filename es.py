@@ -5,7 +5,7 @@ import time
 
 import numpy as np
 
-from dist_mod import MasterClient, WorkerClient   # .dist = packages?
+from dist import MasterClient, WorkerClient   # .dist = packages?
 
 logger = logging.getLogger(__name__)
 
@@ -20,10 +20,22 @@ logger = logging.getLogger(__name__)
 #class SharedNoiseTable(object):
 
 
-#def compute_ranks(x):
+def compute_ranks(x):
+    """
+    Returns ranks in [0, len(x))
+    Note: This is different from scipy.stats.rankdata, which returns ranks in [1, len(x)].
+    """
+    assert x.ndim == 1
+    ranks = np.empty(len(x), dtype=int)
+    ranks[x.argsort()] = np.arange(len(x))
+    return ranks
 
-
-#def compute_centered_ranks(x):
+# Why is this necessary?
+def compute_centered_ranks(x):
+    y = compute_centered_ranks(x.ravel()).reshape(x.shape).astype(np.float32)   # ???
+    y /= (x.size - 1)
+    y -= .5
+    return y
 
 
 def make_session(single_threaded):   # single threaded?
@@ -56,7 +68,7 @@ def setup(exp, single_threaded):
 
 def run_master(master_redis_cfg, log_dir, exp):
     logger.info('run_master: {}'.format(locals()))   # locals?
-    #from optimizers import SGD, Adam
+    from optimizers import SGD, Adam
     #from . import tabular_logger as tlogger
     #logger.info('Tabular logging to {}'.format(log_dir))
     #tlogger.start(log_dir)
