@@ -113,16 +113,157 @@ def save_state(fname):
 # Model components
 # ================================================================
 
-# ...
+# initialization using standard norm?
+def normc_initializer(std=1.0):
+    def _initializer(shape, dtype=None, partition_info=None):   #pylint: disable=W0613 ?
+        out = np.random.randn(*shape).astype(np.float32)
+        out *= std / np.sqrt(np.square(out).sum(axis=0, keepdims=True))
+        return tf.constant(out)
+    return _initializer
+
+def dense(x, size, name, weight_init=None, bias=True):
+    # TODO: study tf's get_variable function
+    w = tf.get_variable(name + "/w", [x.get_shape()[1], size], initializer=weight_init)
+    ret = tf.matmul(x, w)
+    if bias:
+        b = tf.get_variable(name + "/b", [size], initializer=tf.zeros_initializer)
+        return ret + b
+    else:
+        return ret
+
+# ================================================================
+# Basic Stuff
+# ================================================================
+
+def function(inputs, outputs, updates=None, givens=None):
+    if isinstance(outputs, list):
+        return _Function(inputs, outputs, updates, givens=givens)
+    elif isinstance(outputs, dict):
+        f = _Function(inputs, outputs.values(), updates, givens=givens)
+        return lambda *inputs : dict(zip(outputs.keys(), f(*inputs)))
+    else:
+        f = _Function(inputs, [outputs], updates, givens=givens)
+        return lambda *inputs : f(*inputs)[0]
 
 
+# why is this necessary?
+class _Function(object):
+    def __init__(self, inputs, outputs, updates, givens, check_nan=False):
+        assert all(len(i.op.inputs)==0 for i in inputs), "inputs should all be placeholders"
+        self.inputs = inputs
+        updates = updates or []
+        self.update_group = tf.group(*updates)   # group?
+        self.outputs_update = list(outputs) + [self.update_group]
+        self.givens = {} if givens is None else givens
+        self.check_nan = check_nan
+    def __call__(self, *inputvals):   # ???
+        assert len(inputvals) == len(self.inputs)
+        feed_dict = dict(zip(self.inputs, inputvals))
+        feed_dict.update(self.givens)
+        results = get_session().run(self.outputs_update, feed_dict=feed_dict)[:-1]
+        if self.check_nan:
+            if any(np.isnan(r).any() for r in results):
+                raise RuntimeError("Nan detected")
+        return results
+
+# ================================================================
+# Graph traversal
+# ================================================================
+
+VARIABLES = {}
+
+# ================================================================
+# Flat vectors
+# ================================================================
+
+def var_shape(x):
+    out = [k.shape for k in x.get_shape()]
+    assert all(isinstance(a, int) for a in out), "shape function assumes that shape is fully known"
+    return out
+
+def numel(x):
+    return intprod(var_shape(x))
+
+def intprod(x):
+    return int(np.prod(x))
+
+def flatgrad(loss, var_list):
+    # TODO: look into how tf's gradients function works
+    grads = tf.gradients(loss, var_list)
+    return tf.concat(0, [tf.reshape(grad, [numel(v)] for (v, grad) in zip(var_list, grads)])
 
 
+# why is this necessary?
+class SetFromFlat(object):
+    def __init__(self, var_list, dtype=tf.float32):
+        assigns = []
+        shapes = list(map(var_shape, var_list))
+        total_size = np.sum([intprod(shape) for shape in shapes])
+
+        self.theta = theta = tf.placeholder(dtype,[total_size])
+        start=0
+        assigns = []
+        for (shape,v) in zip(shapes,var_list):
+            size = intprod(shape)
+            assigns.append(tf.assign(v, tf.reshape(theta[start:start+size],shape)))   # ???
+            start+=size
+        assert start == total_size
+        self.op = tf.group(*assigns)
+    def __call__(self, theta):
+        get_session().run(self.op, feed_dict={self.theta:theta})
 
 
+# why is this necessary?
+class GetFlat(object):
+    def __init__(self, var_list):
+        self.op = tf.concat(0, [tf.reshape(v, [numel(v)]) for v in var_list])
+    def __call__(self):
+        return get_session().run(self.op)
+
+# ================================================================
+# Misc
+# ================================================================
+
+def scope_vars(scope, trainable_only):
+    """
+    Get variables inside a scope
+    The scope can be specified as a string
+    """
+    return tf.get_collection(
+        tf.GraphKeys.TRAINABLE_VARIABLES if trainable_only else tf.GraphKeys.VARIABLES,
+        scope=scope if isinstance(scope, str) else scope.name
+    )
+
+def in_session(f):
+    @function.wraps(f)   # ???
+    def newfunc(*args, **kwargs):
+        with tf.Session():
+            f(*args, **kwargs)
+    return newfunc
 
 
+# why is the cache necessary?
+_PLACEHOLDER_CACHE = {}    # name -> (placeholder, dtype, shape)
+def get_placeholder(name, dtype, shape):
+    print("calling get_placeholder", name)
+    if name in _PLACEHOLDER_CACHE:
+        out, dtype1, shape1 = _PLACEHOLDER_CACHE[name]
+        assert dtype1==dtype and shape1==shape
+        return out
+    else:
+        out = tf.placeholder(dtype=dtype, shape=shape, name=name)
+        _PLACEHOLDER_CACHE[name] = (out,dtype,shape)
+        return out
+def get_placeholder_cached(name):
+    return _PLACEHOLDER_CACHE[name][0]
 
+# why is this necessary?
+def flattenallbut0(x):
+    return tf.reshape(x, [-1, intprod(x.get_shape().as_list()[1:])])
 
-
-
+def reset():
+    global _PLACEHOLDER_CACHE
+    global VARIABLES
+    _PLACEHOLDER_CACHE = {}
+    VARIABLES = {}
+    tf.reset_default_graph()

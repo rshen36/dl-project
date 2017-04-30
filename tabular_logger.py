@@ -97,4 +97,64 @@ class _Logger(object):
     def dump_tabular(self):
         # Create strings for printing
         key2str = OrderedDict()
-        for (key, valter)
+        for (key, val) in self.name2val.items():
+            if hasattr(val, "__float__"): valstr = "%-8.3g"%val
+            else: valstr = val
+            key2str[self._truncate(key)]=self._truncate(valstr)
+        keywidth = max(map(len, key2str.keys()))   # ???
+        valwidth = max(map(len, key2str.values()))   # ???
+        # Write to all text outputs
+        # What is this shit
+        self._write_text("-"*(keywidth+valwidth+7), "\n")
+        for (key, val) in key2str.items():
+            self._write_text("| ", key, " "*(keywidth-len(key)), " | ", val, " "*(valwidth-len(val)), " |\n")
+        self._write_text("-"*(keywidth+valwidth+7), "\n")
+        for f in self.text_outputs:
+            try: f.flush()
+            except OSError: sys.stderr.write('Warning! OSError when flushing.\n')   # why would there be an OSError?
+        # Write to tensorboard ?
+        if self.tbwriter is not None:
+            self.tbwriter.write_values(self.name2val)
+            self.name2val.clear()
+    def log(self, *args, level=INFO):
+        if self.level <= level:
+            self._do_log(*args)
+
+    # Configuration
+    # ----------------------------------------
+    def set_level(self, level):
+        self.level = level
+    def get_dir(self):
+        return self.dir
+
+    def close(self):
+        for f in self.text_outputs[1:]: f.close()
+        if self.tbwriter: self.tbwriter.close()
+
+    # Misc
+    # ----------------------------------------
+    def _do_log(self, *args):
+        self._write_text(*args, '\n')
+        for f in self.text_outputs:
+            try: f.flush()
+            except OSError: print('Warning! OSError when flushing.')
+    def _write_text(self, *strings):
+        for f in self.text_outputs:
+            for string in strings:
+                f.write(string)
+    def _truncate(self, s):
+        if len(s) > 33:
+            return s[:30] + "..."   # why 30?
+        else:
+            return s
+
+_Logger.DEFAULT = _Logger()
+_Logger.CURRENT = _Logger.DEFAULT
+
+
+
+#def _demo():
+
+
+#if __name__ == "__main__":
+    #_demo()
