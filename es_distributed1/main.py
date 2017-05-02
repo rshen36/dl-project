@@ -32,13 +32,13 @@ def cli():
 @cli.command()   # wut
 @click.option('--exp_str')
 @click.option('--exp_file')
-@click_option('--master_socket_path', required=True)
+@click.option('--master_socket_path', required=True)
 @click.option('--log_dir')
 def master(exp_str, exp_file, master_socket_path, log_dir):
     # Start the master
     assert (exp_str is None) != (exp_file is None), 'Must provide exp_str xor exp_file to the master'
     if exp_str:
-        exp = json.loads(exp_str)
+        exp = json.loads(exp_str)   # what is this json file supposed to do?
     elif exp_file:
         with open(exp_file, 'r') as f:
             exp = json.loads(f.read())

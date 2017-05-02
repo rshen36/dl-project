@@ -68,8 +68,10 @@ class Policy:
 
     # === Rollouts/training ===
 
-    # note: '*' argument is to force the passing of named arguments
-    def rollout(self, env, *, render=False, timestep_limit=None, save_obs=False, random_stream=None):
+    # note: '*' argument is to force the passing of named arguments <-- only in Python 3
+    # TODO: figure out Python 2.7 equivalent
+    #def rollout(self, env, *, render=False, timestep_limit=None, save_obs=False, random_stream=None):
+    def rollout(self, env, render=False, timestep_limit=None, save_obs=False, random_stream=None):
         """
         If random_stream is provided, the rollout will take noisy actions with noise drawn from that stream.
         Otherwise, no action noise will be added.
@@ -130,7 +132,8 @@ class MujocoPolicy(Policy):
         self.connection_type = connection_type
 
         assert len(ob_space.shape) == len(self.ac_space.shape) == 1
-        assert.np.all(np.isfinite(self.ac_space.low)) and np.all(np.isfinite(self.ac_space.high)), 'Action bounds required'
+        assert np.all(np.isfinite(self.ac_space.low)) and np.all(np.isfinite(self.ac_space.high)), \
+            'Action bounds required'
 
         # what tf is an elu
         self.nonlin = {'tanh': tf.tanh, 'relu': tf.nn.relu, 'lrelu': U.lrelu, 'elu': tf.nn.elu}[nonlin_type]

@@ -69,7 +69,7 @@ class SharedNoiseTable(object):
     def get(self, i, dim):
         return self.noise[i:(i+dim)]
 
-    def sample_index(selfself, stream, dim):
+    def sample_index(self, stream, dim):
         return stream.randint(0, len(self.noise) - dim + 1)
 
 
@@ -322,7 +322,8 @@ def rollout_and_update_ob_stat(policy, env, timestep_limit, rs, task_ob_stat, ca
     return rollout_rews, rollout_len
 
 
-def run_worker(relay_redis_cfg, noise, *, min_task_runtime=.2):
+#def run_worker(relay_redis_cfg, noise, *, min_task_runtime=.2):   # '*' a Python 3 feature
+def run_worker(relay_redis_cfg, noise, min_task_runtime=.2):   # TODO: figure out Python 2.7 equivalent
     logger.info('run_worker: {}'.format(locals()))
     assert isinstance(noise, SharedNoiseTable)
     worker = WorkerClient(relay_redis_cfg)
