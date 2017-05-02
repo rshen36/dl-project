@@ -1,6 +1,6 @@
 Repository for Richard Shen's project for Advanced Topics in Deep Learning S17
 
-Supervisor: Lorenzo Torresani 
+Supervisor: Lorenzo Torresani   
 Contributors: Richard Shen  
 Project: Evolutionary Strategies in Long-Term, Strategic Games 
 
