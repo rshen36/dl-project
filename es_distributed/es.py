@@ -5,7 +5,6 @@ from collections import namedtuple
 
 import numpy as np
 
-# TODO: figure out import issues
 from .dist import MasterClient, WorkerClient   # .dist = packages?
 
 logger = logging.getLogger(__name__)
@@ -124,7 +123,8 @@ def batched_weighted_sum(weights, vecs, batch_size):
 def setup(exp, single_threaded):
     import gym
     gym.undo_logger_setup()   # why?
-    from . import policies, tf_util
+    from es_distributed import tf_util
+    from es_distributed import policies
 
     # TODO: figure out what tf is going on here
     config = Config(**exp['config'])
@@ -140,7 +140,7 @@ def run_master(master_redis_cfg, log_dir, exp):
     # TODO: step through this
     logger.info('run_master: {}'.format(locals()))   # locals?
     from .optimizers import SGD, Adam
-    from . import tabular_logger as tlogger
+    from es_distributed import tabular_logger as tlogger
     logger.info('Tabular logging to {}'.format(log_dir))
     tlogger.start(log_dir)
     config, env, sess, policy = setup(exp, single_threaded=False)

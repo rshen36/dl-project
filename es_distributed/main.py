@@ -2,6 +2,7 @@
 import errno
 import json
 import logging
+import multiprocessing
 import os
 import sys
 
@@ -29,7 +30,7 @@ def cli():
         stream=sys.stderr)
 
 
-@cli.command()   # wut
+@cli.command()
 @click.option('--exp_str')
 @click.option('--exp_file')
 @click.option('--master_socket_path', required=True)
@@ -64,7 +65,7 @@ def workers(master_host, master_port, relay_socket_path, num_workers):
         return
     # Start the workers
     noise = SharedNoiseTable()   # Workers share the same noise
-    num_workers = num_workers if num_workers else os.cpu_count()
+    num_workers = num_workers if num_workers else multiprocessing.cpu_count()
     logging.info('Spawning {} workers'.format(num_workers))
     for _ in range(num_workers):
         if os.fork() == 0:

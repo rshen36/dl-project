@@ -141,7 +141,6 @@ class RelayClient:
         self.local_redis.mset({TASK_ID_KEY: task_id, TASK_DATA_KEY: task_data})   # ???
 
 
-
 class WorkerClient:
     def __init__(self, relay_redis_cfg):
         self.local_redis = retry_connect(relay_redis_cfg)   # ???

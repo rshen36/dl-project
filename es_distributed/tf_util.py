@@ -1,8 +1,6 @@
 # Modified from tf_util.py from OpenAI's evolutionary-strategies-starter project
 import numpy as np
 import tensorflow as tf   # pylint: ignore-module ?
-import builtins   # ???
-import functools   # ???
 import copy   # ???
 import os   # ???
 
@@ -88,8 +86,8 @@ def single_threaded_session():
 
 ALREADY_INITIALIZED = set()   # ???
 def initialize():   # bc of how tf treats variable initialization?
-    new_variables = set(tf.all_variables()) - ALREADY_INITIALIZED
-    get_session().run(tf.initialize_variables(new_variables))
+    new_variables = set(tf.global_variables()) - ALREADY_INITIALIZED
+    get_session().run(tf.variables_initializer(new_variables))
     ALREADY_INITIALIZED.update(new_variables)
 
 def eval(expr, feed_dict=None):
@@ -177,7 +175,7 @@ VARIABLES = {}
 # ================================================================
 
 def var_shape(x):
-    out = [k.shape for k in x.get_shape()]
+    out = x.get_shape().as_list()
     assert all(isinstance(a, int) for a in out), "shape function assumes that shape is fully known"
     return out
 
@@ -190,23 +188,22 @@ def intprod(x):
 def flatgrad(loss, var_list):
     # TODO: look into how tf's gradients function works
     grads = tf.gradients(loss, var_list)
-    return tf.concat(0, [tf.reshape(grad, [numel(v)] for (v, grad) in zip(var_list, grads)])
+    return tf.concat(0, [tf.reshape(grad, [numel(v)]) for (v, grad) in zip(var_list, grads)])
 
 
 # why is this necessary?
 class SetFromFlat(object):
     def __init__(self, var_list, dtype=tf.float32):
-        assigns = []
         shapes = list(map(var_shape, var_list))
         total_size = np.sum([intprod(shape) for shape in shapes])
 
-        self.theta = theta = tf.placeholder(dtype,[total_size])
-        start=0
+        self.theta = theta = tf.placeholder(dtype, [total_size])
+        start = 0
         assigns = []
-        for (shape,v) in zip(shapes,var_list):
+        for (shape, v) in zip(shapes, var_list):
             size = intprod(shape)
             assigns.append(tf.assign(v, tf.reshape(theta[start:start+size],shape)))   # ???
-            start+=size
+            start += size
         assert start == total_size
         self.op = tf.group(*assigns)
     def __call__(self, theta):

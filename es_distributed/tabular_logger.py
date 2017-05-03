@@ -7,7 +7,7 @@ from collections import OrderedDict
 
 import tensorflow as tf
 from tensorflow.core.util import event_pb2   # ???
-from tensorflow.python import _pywrap_tensorflow   # ???
+from tensorflow.python import pywrap_tensorflow   # ???
 from tensorflow.python.util import compat   # ???
 
 # wut
@@ -28,7 +28,7 @@ class TbWriter(object):
     def __init__(self, dir, prefix):
         self.dir = dir
         self.step = 1 # Start at 1, because EvWriter automatically generates an object with step=0 ?
-        self.evwriter = _pywrap_tensorflow.EventsWriter(compat.as_bytes(os.path.join(dir, prefix)))
+        self.evwriter = pywrap_tensorflow.EventsWriter(compat.as_bytes(os.path.join(dir, prefix)))
     # TODO: look into tf's EventsWriter
     def write_values(self, key2val):
         summary = tf.Summary(value=[tf.Summary.Value(tag=k, simple_value=float(v))
@@ -45,29 +45,71 @@ class TbWriter(object):
 # API
 # ================================================================
 
-#def start(dir):
+def start(dir):
+    """
+    dir: directory to put all output files
+    force: if dir already exists, should we delete it, or throw a RuntimeError?
+    """
+    if _Logger.CURRENT is not _Logger.DEFAULT:
+        sys.stderr.write(
+            "WARNING: You asked to start logging (dir=%s), but you never stopped the previous logger (dir=%s).\n" % (
+            dir, _Logger.CURRENT.dir))
+    _Logger.CURRENT = _Logger(dir=dir)
 
-#def stop():
+def stop():
+    if _Logger.CURRENT is _Logger.DEFAULT:
+        sys.stderr.write("WARNING: You asked to stop logging, but you never started any previous logger.\n" % (
+        dir, _Logger.CURRENT.dir))
+        return
+    _Logger.CURRENT.close()
+    _Logger.CURRENT = _Logger.DEFAULT
 
-#def record_tabular(key, val):
+def record_tabular(key, val):
+    """
+    Log a value of some diagnostic
+    Call this once for each diagnostic quantity, each iteration
+    """
+    _Logger.CURRENT.record_tabular(key, val)
 
-#def dump_tabular():
+def dump_tabular():
+    """
+    Write all of the diagnostics from the current iteration
+    level: int. (see logger.py docs) If the global logger level is higher than
+                the level argument here, don't print to stdout.
+    """
+    _Logger.CURRENT.dump_tabular()
 
-#def log(*args, level=INFO):
+def log(level=INFO, *args):
+    """
+    Write the sequence of args, with no separators, to the console and output files (if you've configured an output file).
+    """
+    _Logger.CURRENT.log(*args, level=level)
 
-#def debug(*args):
+def debug(*args):
+    log(*args, level=DEBUG)
+def info(*args):
+    log(*args, level=INFO)
+def warn(*args):
+    log(*args, level=WARN)
+def error(*args):
+    log(*args, level=ERROR)
 
-#def info(*args):
+def set_level(level):
+    """
+    Set logging threshold on current logger.
+    """
+    _Logger.CURRENT.set_level(level)
 
-#def warn(*args):
+def get_dir():
+    """
+    Get directory that log files are being written to.
+    will be None if there is no output directory (i.e., if you didn't call start)
+    """
+    return _Logger.CURRENT.get_dir()
 
-#def error(*args):
-
-#def set_level(level):
-
-#def get_dir():
-
-#def get_expt_dir():
+def get_expt_dir():
+    sys.stderr.write("get_expt_dir() is Deprecated. Switch to get_dir()\n")
+    return get_dir()
 
 # ================================================================
 # Backend
@@ -84,7 +126,8 @@ class _Logger(object):
         self.dir = dir
         self.text_outputs = [sys.stdout]
         if dir is not None:
-            os.makedirs(dirs, exist_ok=True)
+            #os.makedirs(dir, exist_ok=True)
+            if not os.path.exists(dir): os.makedirs(dir)
             self.text_outputs.append(open(os.path.join(dir, "log.txt"), "w"))
             self.tbwriter = TbWriter(dir=dir, prefix="events")
         else:
@@ -116,7 +159,7 @@ class _Logger(object):
         if self.tbwriter is not None:
             self.tbwriter.write_values(self.name2val)
             self.name2val.clear()
-    def log(self, *args, level=INFO):
+    def log(self, level=INFO, *args):
         if self.level <= level:
             self._do_log(*args)
 
@@ -134,7 +177,8 @@ class _Logger(object):
     # Misc
     # ----------------------------------------
     def _do_log(self, *args):
-        self._write_text(*args, '\n')
+        self._write_text(*args)
+        self._write_text('\n')
         for f in self.text_outputs:
             try: f.flush()
             except OSError: print('Warning! OSError when flushing.')
