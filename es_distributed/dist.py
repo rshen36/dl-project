@@ -7,16 +7,14 @@ from pprint import pformat
 
 try:
     import cPickle as pickle
-except:
+except ImportError:
     import pickle
 
-
-# TODO: figure out how to use/nuances of Redis
-import redis   # should I use Redis?
+import redis
 
 logger = logging.getLogger(__name__)
 
-# ???
+# why constant keys?
 EXP_KEY = 'es:exp'
 TASK_ID_KEY = 'es:task_id'
 TASK_DATA_KEY = 'es:task_data'
@@ -25,34 +23,33 @@ RESULTS_KEY = 'es:results'
 
 
 def serialize(x):
-    return pickle.dumps(x, protocol=-1) # ???
+    return pickle.dumps(x, protocol=-1)
 
 
 def deserialize(x):
     return pickle.loads(x)
 
 
-# TODO: better understand why responding to ConnectionError in this manner in particular
 def retry_connect(redis_cfg, tries=300, base_delay=4.):
     for i in range(tries):
         try:
-            r = redis.StrictRedis(**redis_cfg) # ???
+            r = redis.StrictRedis(**redis_cfg)
             r.ping()
             return r
         except redis.ConnectionError as e:
             if i == tries - 1:
-                raise   # ???
+                raise
             else:
-                # wut
                 delay = base_delay * (1 + (os.getpid() % 10) / 9)
-                logger.warning('Could not connect to {}. Retrying after {:.2f} sec ({}/{}). Error: {}'.format(redis_cfg, delay, i + 2, tries, e))
+                logger.warning('Could not connect to {}. Retrying after {:.2f} sec ({}/{}). Error: {}'.
+                               format(redis_cfg, delay, i + 2, tries, e))
                 time.sleep(delay)
 
 
 def retry_get(pipe, key, tries=300, base_delay=4.):
     # what are vals?
     for i in range(tries):
-        # Try to (m)get ???
+        # Try to (m)get
         if isinstance(key, (list, tuple)):
             vals = pipe.mget(key)   # pipe?
             if all(v is not None for v in vals):
@@ -61,40 +58,40 @@ def retry_get(pipe, key, tries=300, base_delay=4.):
             val = pipe.get(key)
             if val is not None:
                 return val
-        # Sleep and retry if any key wasn't available ???
+        # Sleep and retry if any key wasn't available
         if i != tries - 1:
             delay = base_delay * (1 + (os.getpid() % 10) / 9)
             logger.warning('{} not set. Retrying after {:.2f} sec ({}/{})'.format(key, delay, i + 2, tries))
             time.sleep(delay)
-    raise RuntimeError('{} not set'.format(key))   # ???
+    raise RuntimeError('{} not set'.format(key))
 
 
 class MasterClient:
     def __init__(self, master_redis_cfg):
-        self.task_counter = 0 # for keeping track of number of workers running
+        self.task_counter = 0   # for keeping track of number of workers running
         self.master_redis = retry_connect(master_redis_cfg)
-        # logger.info('[master] Declared experiment {}'.format(pformat(exp)))
+        logger.info('[master] Connected to Redis {}'.format(self.master_redis))
 
-    # how is EXP_KEY being used?
     def declare_experiment(self, exp):
-        self.master_redis.set(EXP_KEY, serialize(exp))
+        self.master_redis.set(EXP_KEY, serialize(exp))   # storing the experiment
         logger.info('[master] Declared experiment {}'.format(pformat(exp)))
 
-    def declare_task(self, task_data): # declare new worker?
+    def declare_task(self, task_data):   # pass data and task to new worker?
         task_id = self.task_counter
         self.task_counter += 1
 
-        # TODO: figure out what tf is going on here
+        # send serialized task data to worker?
         serialized_task_data = serialize(task_data)
         (self.master_redis.pipeline()
          .mset({TASK_ID_KEY: task_id, TASK_DATA_KEY: serialized_task_data})
-         .publish(TASK_CHANNEL, serialize((task_id, serialized_task_data)))
+         .publish(TASK_CHANNEL, serialize((task_id, serialized_task_data)))   # publish and TASK_CHANNEL?
          .execute())   # TODO: can we avoid transferring task data twice and serializing so much?
         logger.debug('[master] Declared task {}'.format(task_id))
         return task_id
 
     def pop_result(self):
-        task_id, result = deserialize(self.master_redis.blpop(RESULTS_KEY)[1])   # ???
+        # get task data and result from most recently returned worker
+        task_id, result = deserialize(self.master_redis.blpop(RESULTS_KEY)[1])
         logger.debug('[master] Popped a result for task {}'.format(task_id))
         return task_id, result
 
@@ -110,18 +107,18 @@ class RelayClient:
         self.local_redis = retry_connect(relay_redis_cfg)
         logger.info('[relay] Connected to relay: {}'.format(self.local_redis))
 
-    # TODO: figure out what tf is going on here
     def run(self):
         # Initialization: read exp and latest task from master
         self.local_redis.set(EXP_KEY, retry_get(self.master_redis, EXP_KEY))
         self._declare_task_local(*retry_get(self.master_redis, (TASK_ID_KEY, TASK_DATA_KEY)))
 
         # Start subscribing to tasks
-        p = self.master_redis.pubsub(ignore_subscribe_message=True)   # ???
+        #p = self.master_redis.pubsub(ignore_subscribe_message=True)
+        p = self.master_redis.pubsub()   # TODO: study Redis publishing/subscribing messsaging paradigm
         p.subscribe(**{TASK_CHANNEL: lambda msg: self._declare_task_local(*deserialize(msg['data']))})
         p.run_in_thread(sleep_time=0.001)
 
-        # Loop on RESULTS_KEY and push to master ?
+        # Loop on RESULTS_KEY and push to master
         batch_sizes, last_print_time = deque(maxlen=20), time.time()   # for logging
         while True:
             results = []
@@ -136,37 +133,38 @@ class RelayClient:
                 logger.info('[relay] Average batch size {:.3f}'.format(sum(batch_sizes) / len(batch_sizes)))
                 last_print_time = curr_time
 
-    def _declare_task_local(self, task_id, task_data):
+    def _declare_task_local(self, task_id, task_data):   # why does this make the task local?
         logger.info('[relay] Received task {}'.format(task_id))
-        self.local_redis.mset({TASK_ID_KEY: task_id, TASK_DATA_KEY: task_data})   # ???
+        self.local_redis.mset({TASK_ID_KEY: task_id, TASK_DATA_KEY: task_data})
 
 
 class WorkerClient:
     def __init__(self, relay_redis_cfg):
-        self.local_redis = retry_connect(relay_redis_cfg)   # ???
+        self.local_redis = retry_connect(relay_redis_cfg)
         logger.info('[worker] Connected to relay: {}'.format(self.local_redis))
 
         self.cached_task_id, self.cached_task_data = None, None
 
-    def get_experiment(self): # how exactly is 'experiment' defined here?
+    def get_experiment(self):
         # Grab experiment info
-        exp = deserialize(retry_get(self.local_redis, EXP_KEY))   # ???
+        exp = deserialize(retry_get(self.local_redis, EXP_KEY))
         logger.info('[worker] Experiment: {}'.format(exp))
         return exp
 
+    # TODO: study redis pipelines
     def get_current_task(self):
-        with self.local_redis.pipeline() as pipe:   # ???
+        with self.local_redis.pipeline() as pipe:
             while True:
                 try:
-                    # TODO: figure out what tf is going on here
                     pipe.watch(TASK_ID_KEY)
                     task_id = int(retry_get(pipe, TASK_ID_KEY))
                     if task_id == self.cached_task_id:
                         logger.debug('[worker] Returned cached task {}'.format(task_id))
                         break
-                    pipe.multi()
+                    pipe.multi()   # multi?
                     pipe.get(TASK_DATA_KEY)
-                    logger.info('[worker] Getting new task {}. Cached task was {}'.format(task_id, self.cached_task_id))
+                    logger.info('[worker] Getting new task {}. Cached task was {}'.
+                                format(task_id, self.cached_task_id))
                     self.cached_task_id, self.cached_task_data = task_id, deserialize(pipe.execute()[0])
                     break
                 except redis.WatchError:
@@ -174,5 +172,5 @@ class WorkerClient:
         return self.cached_task_id, self.cached_task_data
 
     def push_result(self, task_id, result):
-        self.local_redis.rpush(RESULTS_KEY, serialize((task_id, result)))   # ???
+        self.local_redis.rpush(RESULTS_KEY, serialize((task_id, result)))
         logger.debug('[worker] Pushed result for task {}'.format(task_id))

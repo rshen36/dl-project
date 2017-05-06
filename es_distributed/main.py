@@ -6,7 +6,7 @@ import multiprocessing
 import os
 import sys
 
-import click   # ???
+import click
 
 from .dist import RelayClient
 from .es import run_master, run_worker, SharedNoiseTable
@@ -39,7 +39,7 @@ def master(exp_str, exp_file, master_socket_path, log_dir):
     # Start the master
     assert (exp_str is None) != (exp_file is None), 'Must provide exp_str xor exp_file to the master'
     if exp_str:
-        exp = json.loads(exp_str)   # what is this json file supposed to do?
+        exp = json.loads(exp_str)   # load experiment configuration
     elif exp_file:
         with open(exp_file, 'r') as f:
             exp = json.loads(f.read())
@@ -52,13 +52,16 @@ def master(exp_str, exp_file, master_socket_path, log_dir):
 
 # some fucky shit is going on here (with multithreading?)
 @cli.command()
-@click.option('--master_host', required=True)
-@click.option('--master_port', default=6379, type=int)
+#@click.option('--master_host', required=True)
+#@click.option('--master_port', default=6379, type=int)
+@click.option('--master_socket_path', required=True)
 @click.option('--relay_socket_path', required=True)
 @click.option('--num_workers', type=int, default=0)
-def workers(master_host, master_port, relay_socket_path, num_workers):
+#def workers(master_host, master_port, relay_socket_path, num_workers):
+def workers(master_socket_path, relay_socket_path, num_workers):
     # Start the relay
-    master_redis_cfg = {'host': master_host, 'port': master_port}
+    #master_redis_cfg = {'host': master_host, 'port': master_port}
+    master_redis_cfg = {'unix_socket_path': master_socket_path}
     relay_redis_cfg = {'unix_socket_path': relay_socket_path}
     if os.fork() == 0:
         RelayClient(master_redis_cfg, relay_redis_cfg).run()

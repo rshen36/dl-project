@@ -5,11 +5,10 @@ from collections import namedtuple
 
 import numpy as np
 
-from .dist import MasterClient, WorkerClient   # .dist = packages?
+from .dist import MasterClient, WorkerClient
 
 logger = logging.getLogger(__name__)
 
-# TODO: figure out why these named tuples are necessary
 Config = namedtuple('Config', [   # config = hyperparameters?
     'l2coeff', 'noise_stdev', 'episodes_per_batch', 'timesteps_per_batch',
     'calc_obstat_prob', 'eval_prob', 'snapshot_freq',
@@ -24,16 +23,15 @@ Result = namedtuple('Result', [
 ])
 
 
-# TODO: figure out why it is necessary to define a separate class for running statistics
 class RunningStat(object):   # declares the class to be a new-style class
     def __init__(self, shape, eps):
         self.sum = np.zeros(shape, dtype=np.float32)
-        self.sumsq = np.full(shape, eps, dtype=np.float32)   # np.full?
+        self.sumsq = np.full(shape, eps, dtype=np.float32)   # returns array of given shape with given fill vals
         self.count = eps
 
     def increment(self, s, ssq, c):
         self.sum += s
-        self.ssq += ssq
+        self.sumsq += ssq
         self.count += c
 
     @property
@@ -50,19 +48,19 @@ class RunningStat(object):   # declares the class to be a new-style class
         self.count = init_count
 
 
-class SharedNoiseTable(object):
+class SharedNoiseTable(object):   # sharing same noise among all workers
     def __init__(self):
         import ctypes, multiprocessing   # ???
         seed = 123
 
         # may need to adapt this number
-        count = 250000000  # 1 gigabyte of 32-bit numbers. Will actually sample 2 gigabytes below.
+        count = 250000000   # 1 gigabyte of 32-bit numbers. Will actually sample 2 gigabytes below.
 
         logger.info('Sampling {} random numbers with seed {}'.format(count, seed))
         self._shared_mem = multiprocessing.Array(ctypes.c_float, count)   # ???
         self.noise = np.ctypeslib.as_array(self._shared_mem.get_obj())   # ???
         assert self.noise.dtype == np.float32
-        self.noise[:] = np.random.RandomState(seed).randn(count) # 64-bit to 32-bit conversion here
+        self.noise[:] = np.random.RandomState(seed).randn(count)   # 64-bit to 32-bit conversion here
         logger.info('Sampled {} bytes'.format(self.noise.size * 4))
 
     def get(self, i, dim):
@@ -82,7 +80,7 @@ def compute_ranks(x):
     ranks[x.argsort()] = np.arange(len(x))
     return ranks
 
-# Why is this necessary?
+
 def compute_centered_ranks(x):
     y = compute_centered_ranks(x.ravel()).reshape(x.shape).astype(np.float32)   # ???
     y /= (x.size - 1)
@@ -90,21 +88,21 @@ def compute_centered_ranks(x):
     return y
 
 
-def make_session(single_threaded):   # single threaded?
+def make_session(single_threaded):
     import tensorflow as tf
     if not single_threaded:
         return tf.InteractiveSession()
-    return tf.InteractiveSession(config=tf.ConfigProto(inter_op_parallelism_threads=1, intra_op_parallelism_threads=1))
+    return tf.InteractiveSession(config=tf.ConfigProto(inter_op_parallelism_threads=1,
+                                                       intra_op_parallelism_threads=1))
 
 
-# not quite sure what's going on in this code tbh
-def itergroups(items, group_size):
+def itergroups(items, group_size):   # grab group of size group_size from start of items?
     assert group_size >= 1
     group = []
     for x in items:
         group.append(x)
         if len(group) == group_size:
-            yield tuple(group)   # yield?
+            yield tuple(group)
             del group[:]
     if group:
         yield tuple(group)
@@ -122,34 +120,34 @@ def batched_weighted_sum(weights, vecs, batch_size):
 
 def setup(exp, single_threaded):
     import gym
-    gym.undo_logger_setup()   # why?
+    gym.undo_logger_setup()   # to allow for own logging
     from es_distributed import tf_util
     from es_distributed import policies
 
-    # TODO: figure out what tf is going on here
     config = Config(**exp['config'])
     env = gym.make(exp['env_id'])
     sess = make_session(single_threaded=single_threaded)
-    policy = getattr(policies, exp['policy']['type'])(env.observation_space, env.action_space, **exp['policy']['args'])
+    policy = getattr(policies, exp['policy']['type'])(env.observation_space,
+                                                      env.action_space, **exp['policy']['args'])
     tf_util.initialize()
 
     return config, env, sess, policy
 
 
 def run_master(master_redis_cfg, log_dir, exp):
-    # TODO: step through this
-    logger.info('run_master: {}'.format(locals()))   # locals?
+    # locals(): returns dictionary containing current local symbol table
+    logger.info('run_master: {}'.format(locals()))
     from .optimizers import SGD, Adam
-    from es_distributed import tabular_logger as tlogger
+    from old import tabular_logger as tlogger
     logger.info('Tabular logging to {}'.format(log_dir))
     tlogger.start(log_dir)
     config, env, sess, policy = setup(exp, single_threaded=False)
     master = MasterClient(master_redis_cfg)
-    optimizer = {'sgd': SGD, 'adam': Adam}[exp['optimizer']['type']](policy, **exp['optimizer']['args'])   # wut
+    optimizer = {'sgd': SGD, 'adam': Adam}[exp['optimizer']['type']](policy, **exp['optimizer']['args'])
     noise = SharedNoiseTable()
     rs = np.random.RandomState()
     ob_stat = RunningStat(
-        env.observation_space.shape,   # why?
+        env.observation_space.shape,
         eps=1e-2   # eps to prevent dividing by zero at the beginning when computing mean/stdev
     )
     if 'init_from' in exp['policy']:
@@ -164,7 +162,7 @@ def run_master(master_redis_cfg, log_dir, exp):
         logger.info(
             'Staring timestep limit set to {}. When {}% of rollouts hit the limit, it will be increased by {}'.format(
                 tslimit, incr_tslimit_threshold * 100, tslimit_incr_ratio))
-    elif config.episode_cutoff_mode == 'env_default':   # no stlimit by default
+    elif config.episode_cutoff_mode == 'env_default':   # no tslimit by default
         tslimit, incr_tslimit_threshold, tslimit_incr_ratio = None, None, None
         adaptive_tslimit = False
     else:
@@ -180,7 +178,6 @@ def run_master(master_redis_cfg, log_dir, exp):
         theta = policy.get_trainable_flat()   # theta = policy parameters?
         assert theta.dtype == np.float32
 
-        # what does ob stand for?
         curr_task_id = master.declare_task(Task(   # what exactly is a task in this context?
             params=theta,
             ob_mean=ob_stat.mean if policy.needs_ob_stat else None,
@@ -200,7 +197,7 @@ def run_master(master_redis_cfg, log_dir, exp):
             worker_ids.append(result.worker_id)
 
             if result.eval_length is not None:
-                # This was an eval job <-- ?
+                # This was an eval job
                 episodes_so_far += 1
                 timesteps_so_far += result.eval_length
                 # Store the result only for the current task
@@ -208,7 +205,7 @@ def run_master(master_redis_cfg, log_dir, exp):
                     eval_rets.append(result.eval_return)
                     eval_lens.append(result.eval_length)
             else:
-                # The real shit <-- only when not eval job (what is an eval job?)
+                # The real shit
                 assert (result.noise_inds_n.ndim == 1 and
                         result.returns_n2.shape == result.lengths_n2.shape == (len(result.noise_inds_n), 2))
                 assert result.returns_n2.dtype == np.float32
@@ -241,7 +238,7 @@ def run_master(master_redis_cfg, log_dir, exp):
         lengths_n2 = np.concatenate([r.lengths_n2 for r in curr_task_results])
         assert noise_inds_n.shape[0] == returns_n2.shape[0] == lengths_n2.shape[0]
         # Process returns
-        if config.return_proc_mode == 'centered_rank':   # what exactly is centered rank?
+        if config.return_proc_mode == 'centered_rank':
             proc_returns_n2 = compute_centered_ranks(returns_n2)
         elif config.return_proc_mode == 'sign':   # the signs of the results? <-- that seems wrong
             proc_returns_n2 = np.concatenate([r.signreturns_n2 for r in curr_task_results])
@@ -314,7 +311,7 @@ def run_master(master_redis_cfg, log_dir, exp):
 
 def rollout_and_update_ob_stat(policy, env, timestep_limit, rs, task_ob_stat, calc_obstat_prob):
     if policy.needs_ob_stat and calc_obstat_prob != 0 and rs.rand() < calc_obstat_prob:   # why a probability?
-        rollout_rews, rollout_len, obs = policy.rollout(   # obs = observations?
+        rollout_rews, rollout_len, obs = policy.rollout(   # how to get rendering to work?
             env, timestep_limit=timestep_limit, save_obs=True, random_stream=rs)
         task_ob_stat.increment(obs.sum(axis=0), np.square(obs).sum(axis=0), len(obs))
     else:
@@ -330,7 +327,7 @@ def run_worker(relay_redis_cfg, noise, min_task_runtime=.2):   # TODO: figure ou
     exp = worker.get_experiment()
     config, env, sess, policy = setup(exp, single_threaded=True)
     rs = np.random.RandomState()
-    worker_id = rs.randint(2 ** 31)   # why? <-- don't have to order worker_ids and guarnatee no two same id?
+    worker_id = rs.randint(2 ** 31)   # don't have to order worker_ids and guarantee no two same id?
 
     assert policy.needs_ob_stat == (config.calc_obstat_prob != 0)
 
@@ -346,7 +343,7 @@ def run_worker(relay_redis_cfg, noise, min_task_runtime=.2):   # TODO: figure ou
             policy.set_trainable_flat(task_data.params)
             eval_rews, eval_length = policy.rollout(env)   # eval rollouts don't obey task_data.timestep_limit
             eval_return = eval_rews.sum()
-            logger.info('Eval result: task={} return={:3f length={}'.format(task_id, eval_return, eval_length))
+            logger.info('Eval result: task={} return={:3f} length={}'.format(task_id, eval_return, eval_length))
             worker.push_result(task_id, Result(
                 worker_id=worker_id,
                 noise_inds_n=None,

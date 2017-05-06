@@ -14,7 +14,6 @@ from es_distributed import tf_util as U
 
 logger = logging.getLogger(__name__)
 
-
 #TODO: implement other Env classes
 
 
@@ -53,7 +52,7 @@ class Policy:
         assert filename.endswith('.h5')
         with h5py.File(filename, 'w') as f:
             for v in self.all_variables:
-                f[v.name] = v.eval()   # ???
+                f[v.name] = v.eval()   # evaluating the tf variable?
             # TODO: it would be nice to avoid pickle, but it's convenient to pass Python objects to _initialize
             # (like Gym spaces or numpy arrays)
             f.attrs['name'] = type(self).__name__
@@ -79,18 +78,19 @@ class Policy:
         If random_stream is provided, the rollout will take noisy actions with noise drawn from that stream.
         Otherwise, no action noise will be added.
         """
-        env_timestep_limit = env.spec.tags.get('wrapper_config.TimeLimit.max_episode_steps')   # ???
-        timestep_limit = env_timestep_limit if timestep_limit is None else min(timestep_limit, env_timestep_limit)
+        #env_timestep_limit = env.spec.tags.get('wrapper_config.TimeLimit.max_episode_steps')   # ???
+        #timestep_limit = env_timestep_limit if timestep_limit is None else min(timestep_limit, env_timestep_limit)
         rews = []
         t = 0
         if save_obs:
             obs = []
         ob = env.reset()
-        for _ in range(timestep_limit):
-            ac = self.act(ob[None], random_stream=random_stream)[0]
+        #for _ in range(timestep_limit):
+        while True:
+            ac = self.act(np.squeeze(ob[None]), random_stream=random_stream)[0]
             if save_obs:
                 obs.append(ob)
-            ob, rew, done, _ = env.step(ac)
+            ob, rew, done, _ = env.step(ac.argmax())   # want the argmax?
             rews.append(rew)
             t += 1
             if render:
@@ -153,15 +153,12 @@ class GoPolicy(Policy):
             ])
 
             # Policy network
-            o = tf.placeholder(tf.float32, list(ob_space.shape))   # what the fuck is 'o'
+            o = tf.placeholder(tf.float32, list(ob_space.shape))   # o = input placeholder variable?
             a = self._make_net(tf.clip_by_value((o - ob_mean) / ob_std, -5.0, 5.0))
-            self._act = U.function([o], a)   # ???
+            self._act = U.function([o], a)   # pass o to nn a?
         return scope
 
     def _make_net(self, o):
-        s = o.get_shape().as_list()  # TODO: figure out a less hacky solution
-        o = tf.reshape(o, shape=(s[0], s[1] * s[2]))
-
         # Process observation
         if self.connection_type == 'ff':
             x = o
@@ -170,17 +167,16 @@ class GoPolicy(Policy):
         else:
             raise NotImplementedError(self.connection_type)
 
-        # Map to action <-- CHECK THIS
+        # Map to action
         adim = self.ac_space.n
         a = U.dense(x, adim, 'out', U.normc_initializer(0.01))
         return a
 
-    # TODO: look into set of actions available for GoEnv
     def act(self, ob, random_stream=None):
         a = self._act(ob)
         if random_stream is not None and self.ac_noise_std != 0:
             a += random_stream.randn(*a.shape) * self.ac_noise_std
-        return a
+        return a   # softmax vector
 
     @property
     def needs_ob_stat(self):   # necessary for GoEnv?

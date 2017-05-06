@@ -1,8 +1,8 @@
 # Modified from tf_util.py from OpenAI's evolutionary-strategies-starter project
 import numpy as np
 import tensorflow as tf   # pylint: ignore-module ?
-import copy   # ???
-import os   # ???
+import copy
+import os
 
 # ================================================================
 # Import all names into common namespace
@@ -16,10 +16,10 @@ clip = tf.clip_by_value
 
 def sum(x, axis=None, keepdims=False):
     # What exactly does reduce_sum do generally?
-    return tf.reduce_sum(x, reduction_indices=None if axis is None else [axis], keep_dims = keepdims)
+    return tf.reduce_sum(x, reduction_indices=None if axis is None else [axis], keep_dims=keepdims)
 def mean(x, axis=None, keepdims=False):
     # What exactly does reduce_mean do generally?
-    return tf.reduce_mean(x, reduction_indices=None if axis is None else [axis], kee_dims = keepdims)
+    return tf.reduce_mean(x, reduction_indices=None if axis is None else [axis], keep_dims=keepdims)
 def var(x, axis=None, keepdims=False):
     meanx = mean(x, axis=axis, keepdims=keepdims)
     return mean(tf.square(x - meanx), axis=axis, keepdims=keepdims)
@@ -27,14 +27,15 @@ def std(x, axis=None, keepdims=False):
     return tf.sqrt(var(x, axis=axis, keepdims=keepdims))
 def max(x, axis=None, keepdims=False):
     # What exactly does reduce_max do generally?
-    return tf.reduce_max(x, reduction_indices=None if axis is None else [axis], keep_dims = keepdims)
+    return tf.reduce_max(x, reduction_indices=None if axis is None else [axis], keep_dims=keepdims)
 def min(x, axis=None, keepdims=False):
     # What exactly does reduce_min do generally?
-    return tf.reduce_min(x, reduction_indices=None if axis is None else [axis], keep_dims = keepdims)
+    return tf.reduce_min(x, reduction_indices=None if axis is None else [axis], keep_dims=keepdims)
 def concatenate(arrs, axis=0):
     return tf.concat(axis, arrs)
 def argmax(x, axis=None):
     return tf.argmax(x, dimension=axis)
+
 
 # When would this be necessary?
 def switch(condition, then_expression, else_expression):
@@ -120,9 +121,12 @@ def normc_initializer(std=1.0):
     return _initializer
 
 def dense(x, size, name, weight_init=None, bias=True):
-    # TODO: study tf's get_variable function
+    if len(x.get_shape()) > 2:
+        shape = x.get_shape().as_list()
+        x = tf.reshape(x, [shape[0], shape[1] * shape[2]])
     w = tf.get_variable(name + "/w", [x.get_shape()[1], size], initializer=weight_init)
     ret = tf.matmul(x, w)
+
     if bias:
         b = tf.get_variable(name + "/b", [size], initializer=tf.zeros_initializer)
         return ret + b
@@ -147,7 +151,7 @@ def function(inputs, outputs, updates=None, givens=None):
 # why is this necessary?
 class _Function(object):
     def __init__(self, inputs, outputs, updates, givens, check_nan=False):
-        assert all(len(i.op.inputs)==0 for i in inputs), "inputs should all be placeholders"
+        assert all(len(i.op.inputs) == 0 for i in inputs), "inputs should all be placeholders"
         self.inputs = inputs
         updates = updates or []
         self.update_group = tf.group(*updates)   # group?

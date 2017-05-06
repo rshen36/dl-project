@@ -4,14 +4,14 @@ import numpy as np
 
 class Optimizer(object):
     def __init__(self, pi):
-        self.pi = pi   # ???
+        self.pi = pi   # parameters?
         self.dim = pi.num_params
         self.t = 0
 
     def update(self, globalg):
         self.t += 1
         step = self._compute_step(globalg)
-        theta = self.pi.get_trainable_flat()   # ???
+        theta = self.pi.get_trainable_flat()
         ratio = np.linalg.norm(step) / np.linalg.norm(theta)
         self.pi.set_trainable_flat(theta + step)
         return ratio
