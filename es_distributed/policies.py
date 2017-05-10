@@ -21,7 +21,8 @@ class Policy:
     def __init__(self, *args, **kwargs):
         self.args, self.kwargs = args, kwargs
         self.scope = self._initialize(*args, **kwargs)   # scope?
-        self.all_variables = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, self.scope.name)
+        #self.all_variables = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, self.scope.name)
+        self.all_variables = tf.get_collection(tf.global_variables(), self.scope.name)  # same thing?
 
         self.trainable_variables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, self.scope.name)
         self.num_params = sum(int(np.prod(v.get_shape().as_list())) for v in self.trainable_variables)
