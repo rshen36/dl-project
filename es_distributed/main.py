@@ -22,7 +22,7 @@ def mkdir_p(path):
             raise
 
 
-@click.group()   # wut
+@click.group()
 def cli():
     logging.basicConfig(
         format='[%(asctime)s pid=$(process)d] %(message)s',

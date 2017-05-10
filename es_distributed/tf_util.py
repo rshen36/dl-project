@@ -128,7 +128,7 @@ def dense(x, size, name, weight_init=None, bias=True):
     ret = tf.matmul(x, w)
 
     if bias:
-        b = tf.get_variable(name + "/b", [size], initializer=tf.zeros_initializer)
+        b = tf.get_variable(name + "/b", [size], initializer=tf.constant_initializer(0.0))
         return ret + b
     else:
         return ret
