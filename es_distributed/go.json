@@ -23,8 +23,8 @@
       "ac_noise_std": 0.01,
       "connection_type": "ff",
       "hidden_dims": [
-        512,
-        512
+        128,
+        128
       ],
       "nonlin_type": "tanh"
     },
