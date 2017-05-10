@@ -217,7 +217,8 @@ class SetFromFlat(object):
 # why is this necessary?
 class GetFlat(object):
     def __init__(self, var_list):
-        self.op = tf.concat(0, [tf.reshape(v, [numel(v)]) for v in var_list])
+        #self.op = tf.concat(0, [tf.reshape(v, [numel(v)]) for v in var_list])  # for tf 0.11
+        self.op = tf.concat([tf.reshape(v, [numel(v)]) for v in var_list], 0)  # for tf 0.12
     def __call__(self):
         return get_session().run(self.op)
 
