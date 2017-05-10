@@ -4,7 +4,7 @@ import tensorflow as tf   # pylint: ignore-module ?
 import copy
 import os
 
-gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.25)
+gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.40)
 
 # ================================================================
 # Import all names into common namespace
