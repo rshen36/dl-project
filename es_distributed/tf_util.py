@@ -4,7 +4,7 @@ import tensorflow as tf   # pylint: ignore-module ?
 import copy
 import os
 
-gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.99)
+#gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.99)
 
 # ================================================================
 # Import all names into common namespace
@@ -78,14 +78,14 @@ def lrelu(x, leak=0.2):
 # ================================================================
 
 def get_session():
-    sess = tf.Session(config=tf.ConfigProto(gpu_options=gpu_options))
-    return sess
-    #return tf.get_default_session()
+    #sess = tf.Session(config=tf.ConfigProto(gpu_options=gpu_options))
+    #return sess
+    return tf.get_default_session()
 
 # TODO: study how tf sessions work, particularly the config pmrs
 def single_threaded_session():
     tf_config = tf.ConfigProto(
-        gpu_options=gpu_options,
+        #gpu_options=gpu_options,
         inter_op_parallelism_threads=1,
         intra_op_parellelism_threads=1)
     return tf.Session(config=tf_config)
