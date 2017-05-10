@@ -58,14 +58,14 @@ class Policy:
             f.attrs['name'] = type(self).__name__
             f.attrs['args_and_kwargs'] = np.void(pickle.dumps((self.args, self.kwargs), protocol=-1))   # ???
 
-    @classmethod   # TODO: study up on decorators
+    @classmethod
     def Load(cls, filename, extra_kwargs=None):
         with h5py.File(filename, 'r') as f:
             args, kwargs = pickle.loads(f.attrs['args_and_kwargs'].tostring())
             if extra_kwargs:
-                kwargs.update(extra_kwargs)   # ???
-            policy = cls(*args, **kwargs)   # ???
-            policy.set_all_vars(*[f[v.name][...] for v in policy.all_variables])   # ???
+                kwargs.update(extra_kwargs)
+            policy = cls(*args, **kwargs)
+            policy.set_all_vars(*[f[v.name][...] for v in policy.all_variables])
         return policy
 
     # === Rollouts/training ===
