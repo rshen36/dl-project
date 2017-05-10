@@ -55,7 +55,7 @@ class SharedNoiseTable(object):   # sharing same noise among all workers
 
         # may need to adapt this number
         #count = 250000000   # 1 gigabyte of 32-bit numbers. Will actually sample 2 gigabytes below.
-        count = 250000
+        count = 2500000
 
         logger.info('Sampling {} random numbers with seed {}'.format(count, seed))
         self._shared_mem = multiprocessing.Array(ctypes.c_float, count)   # ???
