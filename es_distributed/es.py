@@ -307,7 +307,7 @@ def run_master(master_redis_cfg, log_dir, exp):
             ))
             assert not osp.exists(filename)
             policy.save(filename)
-            tlogger.log('Saved snapshot {]'.format(filename))
+            tlogger.log('Saved snapshot {}'.format(filename))
 
 
 def rollout_and_update_ob_stat(policy, env, timestep_limit, rs, task_ob_stat, calc_obstat_prob):
