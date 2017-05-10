@@ -83,7 +83,7 @@ def compute_ranks(x):
 
 
 def compute_centered_ranks(x):
-    y = compute_centered_ranks(x.ravel()).reshape(x.shape).astype(np.float32)   # ???
+    y = compute_ranks(x.ravel()).reshape(x.shape).astype(np.float32)   # ???
     y /= (x.size - 1)
     y -= .5
     return y
