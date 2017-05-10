@@ -138,7 +138,7 @@ def run_master(master_redis_cfg, log_dir, exp):
     # locals(): returns dictionary containing current local symbol table
     logger.info('run_master: {}'.format(locals()))
     from .optimizers import SGD, Adam
-    from old import tabular_logger as tlogger
+    from es_distributed import tabular_logger as tlogger
     logger.info('Tabular logging to {}'.format(log_dir))
     tlogger.start(log_dir)
     config, env, sess, policy = setup(exp, single_threaded=False)
