@@ -145,7 +145,7 @@ def run_master(master_redis_cfg, log_dir, exp):
     config, env, sess, policy = setup(exp, single_threaded=False)
     master = MasterClient(master_redis_cfg)
     optimizer = {'sgd': SGD, 'adam': Adam}[exp['optimizer']['type']](policy, **exp['optimizer']['args'])
-    noise = SharedNoiseTable()
+    noise = SharedNoiseTable()  # unnecessary?
     rs = np.random.RandomState()
     ob_stat = RunningStat(
         env.observation_space.shape,
