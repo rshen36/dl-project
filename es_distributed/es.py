@@ -23,7 +23,7 @@ Result = namedtuple('Result', [
 ])
 
 
-class RunningStat(object):   # declares the class to be a new-style class
+class RunningStat(object):
     def __init__(self, shape, eps):
         self.sum = np.zeros(shape, dtype=np.float32)
         self.sumsq = np.full(shape, eps, dtype=np.float32)   # returns array of given shape with given fill vals
