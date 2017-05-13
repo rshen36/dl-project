@@ -1,16 +1,14 @@
 {
   "config": {
     "calc_obstat_prob": 0.01,
-    "episodes_per_batch": 100,
+    "episodes_per_batch": 1000,
     "eval_prob": 0.03,
     "l2coeff": 0.005,
     "noise_stdev": 0.02,
-    "snapshot_freq": 20,
-    "timesteps_per_batch": 1000,
-    "return_proc_mode": "centered_rank",
-    "episode_cutoff_mode": "env_default"
+    "snapshot_freq": 10,
+    "return_proc_mode": "centered_rank"
   },
-  "env_id": "Go19x19-v0",
+  "env_id": "Go9x9-v0",
   "exp_prefix": "test",
   "optimizer": {
     "args": {
@@ -23,10 +21,11 @@
       "ac_noise_std": 0.01,
       "connection_type": "ff",
       "hidden_dims": [
-        128,
-        128
+        1024,
+        1024,
+        1024
       ],
-      "nonlin_type": "tanh"
+      "nonlin_type": "lrelu"
     },
     "type": "GoPolicy"
   }

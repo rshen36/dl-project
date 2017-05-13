@@ -39,7 +39,7 @@ class Policy:
             logger.info('- {} shape:{} size:{}'.format(v.name, shp, np.prod(shp)))
 
         placeholders = [tf.placeholder(v.value().dtype, v.get_shape().as_list()) for v in self.all_variables]
-        self.set_all_vars = U.function(   # ???
+        self.set_all_vars = U.function(
             inputs=placeholders,
             outputs=[],
             updates=[tf.group(*[v.assign(p) for v, p in zip(self.all_variables, placeholders)])]
@@ -70,22 +70,16 @@ class Policy:
 
     # === Rollouts/training ===
 
-    # note: '*' argument is to force the passing of named arguments <-- only in Python 3
-    # TODO: figure out Python 2.7 equivalent
-    #def rollout(self, env, *, render=False, timestep_limit=None, save_obs=False, random_stream=None):
-    def rollout(self, env, render=False, timestep_limit=None, save_obs=False, random_stream=None):
+    def rollout(self, env, render=False, save_obs=False, random_stream=None):
         """
         If random_stream is provided, the rollout will take noisy actions with noise drawn from that stream.
         Otherwise, no action noise will be added.
         """
-        #env_timestep_limit = env.spec.tags.get('wrapper_config.TimeLimit.max_episode_steps')   # ???
-        #timestep_limit = env_timestep_limit if timestep_limit is None else min(timestep_limit, env_timestep_limit)
         rews = []
         t = 0
         if save_obs:
             obs = []
         ob = env.reset()
-        #for _ in range(timestep_limit):
         while True:
             ac = self.act(np.squeeze(ob[None]), random_stream=random_stream)[0]
             if save_obs:
@@ -126,6 +120,7 @@ class Policy:
 #     return tf.argmax(scores_nab, 2)   # 0 ... num_bins-1
 
 
+# for now, just try to learn Go9x9
 class GoPolicy(Policy):
     # ob_space = Box(3, 19, 19)
     # ac_space = Discrete(363)   19*19 + 2
@@ -171,6 +166,34 @@ class GoPolicy(Policy):
         adim = self.ac_space.n
         a = U.dense(x, adim, 'out', U.normc_initializer(0.01))
         return a
+
+    # only interested in last scalar reward (-1 or 1)
+    def rollout(self, env, render=False, save_obs=False, random_stream=None):
+        """
+        If random_stream is provided, the rollout will take noisy actions with noise drawn from that stream.
+        Otherwise, no action noise will be added.
+        """
+        t = 0
+        if save_obs:
+            obs = []
+        ob = env.reset()
+        while True:
+            ac = self.act(np.squeeze(ob[None]), random_stream=random_stream)[0]
+            if (ac.argmax()) == self.ac_space.n-1:
+                ac = np.random.randint(0, self.ac_space.n-2)  # force agent to not resign
+            else:
+                ac = ac.argmax()  # want the argmax?
+            if save_obs:
+                obs.append(ob)
+            ob, rew, _, _ = env.step(ac)  # for now, not using done signal
+            t += 1
+            if render:
+                env.render()
+            if np.abs(rew) == 1:  # should help avoid weird mean 0 reward bug?
+                break
+        if save_obs:
+            return rew, t, np.array(obs)
+        return rew, t
 
     def act(self, ob, random_stream=None):
         a = self._act(ob)

@@ -9,12 +9,11 @@ from .dist import MasterClient, WorkerClient
 
 logger = logging.getLogger(__name__)
 
-Config = namedtuple('Config', [   # config = hyperparameters?
-    'l2coeff', 'noise_stdev', 'episodes_per_batch', 'timesteps_per_batch',
-    'calc_obstat_prob', 'eval_prob', 'snapshot_freq',
-    'return_proc_mode', 'episode_cutoff_mode'
+Config = namedtuple('Config', [
+    'l2coeff', 'noise_stdev', 'episodes_per_batch',
+    'calc_obstat_prob', 'eval_prob', 'snapshot_freq', 'return_proc_mode'
 ])
-Task = namedtuple('Task', ['params', 'ob_mean', 'ob_std', 'timestep_limit'])
+Task = namedtuple('Task', ['params', 'ob_mean', 'ob_std'])
 Result = namedtuple('Result', [
     'worker_id',
     'noise_inds_n', 'returns_n2', 'signreturns_n2', 'lengths_n2',
@@ -151,23 +150,9 @@ def run_master(master_redis_cfg, log_dir, exp):
         env.observation_space.shape,
         eps=1e-2   # eps to prevent dividing by zero at the beginning when computing mean/stdev
     )
-    if 'init_from' in exp['policy']:
-        logger.info('Initializing weights from {}'.format(exp['policy']['init_from']))
-        policy.initialize_from(exp['policy']['init_from'], ob_stat)
-
-    if config.episode_cutoff_mode.startswith('adaptive:'):   # adaptive timestep limit
-        _, args = config.episode_cutoff_mode.split(':')
-        arg0, arg1, arg2 = args.split(',')
-        tslimit, incr_tslimit_threshold, tslimit_incr_ratio = int(arg0), float(arg1), float(arg2)
-        adaptive_tslimit = True   # tslimit = timestep limit
-        logger.info(
-            'Staring timestep limit set to {}. When {}% of rollouts hit the limit, it will be increased by {}'.format(
-                tslimit, incr_tslimit_threshold * 100, tslimit_incr_ratio))
-    elif config.episode_cutoff_mode == 'env_default':   # no tslimit by default
-        tslimit, incr_tslimit_threshold, tslimit_incr_ratio = None, None, None
-        adaptive_tslimit = False
-    else:
-        raise NotImplementedError(config.episode_cutoff_mode)
+    # if 'init_from' in exp['policy']:
+    #     logger.info('Initializing weights from {}'.format(exp['policy']['init_from']))
+    #     policy.initialize_from(exp['policy']['init_from'], ob_stat)
 
     episodes_so_far = 0
     timesteps_so_far = 0
@@ -182,15 +167,14 @@ def run_master(master_redis_cfg, log_dir, exp):
         curr_task_id = master.declare_task(Task(   # what exactly is a task in this context?
             params=theta,
             ob_mean=ob_stat.mean if policy.needs_ob_stat else None,
-            ob_std=ob_stat.std if policy.needs_ob_stat else None,
-            timestep_limit=tslimit
+            ob_std=ob_stat.std if policy.needs_ob_stat else None
         ))
         tlogger.log('********** Iteration {} **********'.format(curr_task_id))
 
         # Pop off results for the current task
         curr_task_results, eval_rets, eval_lens, worker_ids = [], [], [], []
-        num_results_skipped, num_episodes_popped, num_timesteps_popped, ob_count_this_batch = 0, 0, 0, 0
-        while num_episodes_popped < config.episodes_per_batch or num_timesteps_popped < config.timesteps_per_batch:
+        num_results_skipped, num_episodes_popped, ob_count_this_batch = 0, 0, 0
+        while num_episodes_popped < config.episodes_per_batch:
             # Wait for a result
             task_id, result = master.pop_result()
             assert isinstance(task_id, int) and isinstance(result, Result)
@@ -219,7 +203,6 @@ def run_master(master_redis_cfg, log_dir, exp):
                 if task_id == curr_task_id:
                     curr_task_results.append(result)
                     num_episodes_popped += result_num_eps
-                    num_timesteps_popped += result_num_timesteps
                     # Update ob stats
                     if policy.needs_ob_stat and result.ob_count > 0:
                         ob_stat.increment(result.ob_sum, result.ob_sumsq, result.ob_count)
@@ -241,7 +224,7 @@ def run_master(master_redis_cfg, log_dir, exp):
         # Process returns
         if config.return_proc_mode == 'centered_rank':
             proc_returns_n2 = compute_centered_ranks(returns_n2)
-        elif config.return_proc_mode == 'sign':   # the signs of the results? <-- that seems wrong
+        elif config.return_proc_mode == 'sign':
             proc_returns_n2 = np.concatenate([r.signreturns_n2 for r in curr_task_results])
         elif config.return_proc_mode == 'centered_sign_rank':
             proc_returns_n2 = compute_centered_ranks(np.concatenate([r.signreturns_n2 for r in curr_task_results]))
@@ -260,12 +243,6 @@ def run_master(master_redis_cfg, log_dir, exp):
         # Update ob stat (we're never running the policy in the master, but we might be snapshotting the policy)
         if policy.needs_ob_stat:
             policy.set_ob_stat(ob_stat.mean, ob_stat.std)
-
-        # Update number of steps to take
-        if adaptive_tslimit and (lengths_n2 == tslimit).mean() >= incr_tslimit_threshold:
-            old_tslimit = tslimit
-            tslimit = int(tslimit_incr_ratio * tslimit)
-            logger.info('Increased timestep limit from {} to {]'.format(old_tslimit, tslimit))
 
         step_tend = time.time()
         tlogger.record_tabular("EpRewMean", returns_n2.mean())
@@ -310,18 +287,16 @@ def run_master(master_redis_cfg, log_dir, exp):
             tlogger.log('Saved snapshot {}'.format(filename))
 
 
-def rollout_and_update_ob_stat(policy, env, timestep_limit, rs, task_ob_stat, calc_obstat_prob):
+def rollout_and_update_ob_stat(policy, env, rs, task_ob_stat, calc_obstat_prob):
     if policy.needs_ob_stat and calc_obstat_prob != 0 and rs.rand() < calc_obstat_prob:   # why a probability?
-        rollout_rews, rollout_len, obs = policy.rollout(   # how to get rendering to work?
-            env, timestep_limit=timestep_limit, save_obs=True, random_stream=rs)
+        rollout_rew, rollout_len, obs = policy.rollout(env, save_obs=True, random_stream=rs)
         task_ob_stat.increment(obs.sum(axis=0), np.square(obs).sum(axis=0), len(obs))
     else:
-        rollout_rews, rollout_len = policy.rollout(env, timestep_limit=timestep_limit, random_stream=rs)
-    return rollout_rews, rollout_len
+        rollout_rew, rollout_len = policy.rollout(env, random_stream=rs)
+    return rollout_rew, rollout_len
 
 
-#def run_worker(relay_redis_cfg, noise, *, min_task_runtime=.2):   # '*' a Python 3 feature
-def run_worker(relay_redis_cfg, noise, min_task_runtime=.2):   # TODO: figure out Python 2.7 equivalent
+def run_worker(relay_redis_cfg, noise, min_task_runtime=1.):  # what should min_task_runtime default be?
     logger.info('run_worker: {}'.format(locals()))
     assert isinstance(noise, SharedNoiseTable)
     worker = WorkerClient(relay_redis_cfg)
@@ -342,8 +317,7 @@ def run_worker(relay_redis_cfg, noise, min_task_runtime=.2):   # TODO: figure ou
         if rs.rand() < config.eval_prob:
             # Evaluation: noiseless weights and noiseless actions
             policy.set_trainable_flat(task_data.params)
-            eval_rews, eval_length = policy.rollout(env)   # eval rollouts don't obey task_data.timestep_limit
-            eval_return = eval_rews.sum()
+            eval_return, eval_length = policy.rollout(env)
             logger.info('Eval result: task={} return={:3f} length={}'.format(task_id, eval_return, eval_length))
             worker.push_result(task_id, Result(
                 worker_id=worker_id,
@@ -368,17 +342,17 @@ def run_worker(relay_redis_cfg, noise, min_task_runtime=.2):   # TODO: figure ou
 
                 # finite differences (adding and subtracting v)?
                 policy.set_trainable_flat(task_data.params + v)
-                rews_pos, len_pos = rollout_and_update_ob_stat(
-                    policy, env, task_data.timestep_limit, rs, task_ob_stat, config.calc_obstat_prob)
+                return_pos, len_pos = rollout_and_update_ob_stat(
+                    policy, env, rs, task_ob_stat, config.calc_obstat_prob)
 
                 policy.set_trainable_flat(task_data.params - v)
-                rews_neg, len_neg = rollout_and_update_ob_stat(
-                    policy, env, task_data.timestep_limit, rs, task_ob_stat, config.calc_obstat_prob)
+                return_neg, len_neg = rollout_and_update_ob_stat(
+                    policy, env, rs, task_ob_stat, config.calc_obstat_prob)
 
                 # want to keep track of sign returns bc of way fd calculated?
                 noise_inds.append(noise_idx)
-                returns.append([rews_pos.sum(), rews_neg.sum()])
-                signreturns.append([np.sign(rews_pos).sum(), np.sign(rews_neg).sum()])
+                returns.append([return_pos, return_neg])
+                signreturns.append([np.sign(return_pos).sum(), np.sign(return_neg).sum()])
                 lengths.append([len_pos, len_neg])
 
             worker.push_result(task_id, Result(

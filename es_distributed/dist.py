@@ -14,7 +14,6 @@ import redis
 
 logger = logging.getLogger(__name__)
 
-# why constant keys?
 EXP_KEY = 'es:exp'
 TASK_ID_KEY = 'es:task_id'
 TASK_DATA_KEY = 'es:task_data'
@@ -113,7 +112,6 @@ class RelayClient:
         self._declare_task_local(*retry_get(self.master_redis, (TASK_ID_KEY, TASK_DATA_KEY)))
 
         # Start subscribing to tasks
-        #p = self.master_redis.pubsub(ignore_subscribe_message=True)
         p = self.master_redis.pubsub()   # TODO: study Redis publishing/subscribing messsaging paradigm
         p.subscribe(**{TASK_CHANNEL: lambda msg: self._declare_task_local(*deserialize(msg['data']))})
         p.run_in_thread(sleep_time=0.001)
@@ -123,17 +121,17 @@ class RelayClient:
         while True:
             results = []
             start_time = curr_time = time.time()
-            while curr_time - start_time < 0.001:
+            while curr_time - start_time < 0.1:  # need to raise this number?
                 results.append(self.local_redis.blpop(RESULTS_KEY)[1])
                 curr_time = time.time()
             self.master_redis.rpush(RESULTS_KEY, *results)
             # Log
             batch_sizes.append(len(results))
-            if curr_time - last_print_time > 5.0:
+            if curr_time - last_print_time > 10.0:  # need to raise this number?
                 logger.info('[relay] Average batch size {:.3f}'.format(sum(batch_sizes) / len(batch_sizes)))
                 last_print_time = curr_time
 
-    def _declare_task_local(self, task_id, task_data):   # why does this make the task local?
+    def _declare_task_local(self, task_id, task_data):
         logger.info('[relay] Received task {}'.format(task_id))
         self.local_redis.mset({TASK_ID_KEY: task_id, TASK_DATA_KEY: task_data})
 
