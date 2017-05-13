@@ -4,6 +4,9 @@ import time
 from collections import namedtuple
 
 import numpy as np
+import matplotlib
+matplotlib.use('TKAgg')
+import matplotlib.pyplot as plt
 
 from .dist import MasterClient, WorkerClient
 
@@ -159,12 +162,28 @@ def run_master(master_redis_cfg, log_dir, exp):
     tstart = time.time()
     master.declare_experiment(exp)
 
+    # visualization
+    # TODO: improve efficiency and quality of visualizations
+    fig, ax = plt.subplots(1, 1)
+    ax.set_xlim(0, 100)
+    ax.set_ylim(-1, 0)
+    ax.hold(True)
+
+    plt.show(False)
+    plt.draw()
+
+    # cache the background
+    background = fig.canvas.copy_from_bbox(ax.bbox)
+
+    points = ax.plot([], [], 'o')[0]
+
+    iterations, returns = [], []
     while True:
         step_tstart = time.time()
-        theta = policy.get_trainable_flat()   # theta = policy parameters?
+        theta = policy.get_trainable_flat()
         assert theta.dtype == np.float32
 
-        curr_task_id = master.declare_task(Task(   # what exactly is a task in this context?
+        curr_task_id = master.declare_task(Task(
             params=theta,
             ob_mean=ob_stat.mean if policy.needs_ob_stat else None,
             ob_std=ob_stat.std if policy.needs_ob_stat else None
@@ -178,7 +197,7 @@ def run_master(master_redis_cfg, log_dir, exp):
             # Wait for a result
             task_id, result = master.pop_result()
             assert isinstance(task_id, int) and isinstance(result, Result)
-            assert (result.eval_return is None) == (result.eval_length is None)   # must either be both T or both F?
+            assert (result.eval_return is None) == (result.eval_length is None)
             worker_ids.append(result.worker_id)
 
             if result.eval_length is not None:
@@ -285,6 +304,15 @@ def run_master(master_redis_cfg, log_dir, exp):
             assert not osp.exists(filename)
             policy.save(filename)
             tlogger.log('Saved snapshot {}'.format(filename))
+
+        # training visualization
+        iterations.append(curr_task_id)
+        returns.append(returns_n2.mean())
+
+        points.set_data(curr_task_id, returns_n2.mean())
+        fig.canvas.restore_region(background)  # restore background
+        ax.draw_artist(points)  # redraw just the points
+        fig.canvas.blit(ax.bbox)  # fill in the axes rectangle
 
 
 def rollout_and_update_ob_stat(policy, env, rs, task_ob_stat, calc_obstat_prob):
