@@ -95,3 +95,6 @@ ENV/
 # Emacs
 *~
 .*~
+
+results/*
+results/
