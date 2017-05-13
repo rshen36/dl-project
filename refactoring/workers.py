@@ -1,5 +1,6 @@
 # Code for running the worker processes
 import os
+import sys
 import time
 import logging
 import multiprocessing
@@ -7,6 +8,7 @@ import numpy as np
 
 try: import cPickle as pickle
 except ImportError: import pickle
+import click
 
 from .relay import Relay, retry_connect, retry_get
 from exp_util import SharedNoiseTable, RunningStat
@@ -22,7 +24,18 @@ TASK_CHANNEL = 'es:task_channel'
 RESULTS_KEY = 'es:results'
 
 
-#@cli.command()
+@click.group()
+def cli():
+    logging.basicConfig(
+        format='[%(asctime)s pid=$(process)d] %(message)s',
+        level=logging.INFO,
+        stream=sys.stderr)
+
+
+@cli.command()
+@click.option('--master_socket_path', required=True)
+@click.option('--relay_socket_path', required=True)
+@click.option('--num_workers', type=int, default=0)
 def start_workers(master_socket_path, relay_socket_path, num_workers):
     master_redis_cfg = {'unix_socket_path': master_socket_path}
     relay_redis_cfg = {'unix_socket_path': relay_socket_path}

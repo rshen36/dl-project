@@ -2,18 +2,20 @@
 import logging
 import json
 import time
+import sys
 import os
 import numpy as np
 from pprint import pformat
 
 try: import cPickle as pickle
 except ImportError: import pickle
+import click
 
 from .relay import retry_connect
 from .exp_util import RunningStat, SharedNoiseTable
 import exp_util as eu
 
-logger = logging.getLogger(__name__)
+#logger = logging.getLogger(__name__)
 
 EXP_KEY = 'es:exp'
 TASK_ID_KEY = 'es:task_id'
@@ -22,7 +24,18 @@ TASK_CHANNEL = 'es:task_channel'
 RESULTS_KEY = 'es:results'
 
 
-#@cli.command()
+# @click.group()
+# def cli():
+#     logging.basicConfig(
+#         format='[%(asctime)s pid=$(process)d] %(message)s',
+#         level=logging.INFO,
+#         stream=sys.stderr)
+
+
+# @cli.command()
+# @click.option('--exp_file')
+# @click.option('--master_socket_path', required=True)
+# @click.option('--log_dir')
 def start_master(exp_file, master_socket_path, log_dir):
     with open(exp_file, 'r') as f: exp = json.loads(f.read())  # open experiment config file
     log_dir = os.path.expanduser(log_dir) if log_dir else '/tmp/es_master_{}'.format(os.getpid())
@@ -31,10 +44,10 @@ def start_master(exp_file, master_socket_path, log_dir):
 
 
 def run_master(master_redis_config, log_dir, exp):
-    logger.info('run_master: {}'.format(locals()))
+    logging.info('run_master: {}'.format(locals()))
     from .optimizers import SGD, Adam
     from . import tabular_logger as tlogger
-    logger.info('Tabular logging to {}'.format(log_dir))
+    logging.info('Tabular logging to {}'.format(log_dir))
     tlogger.start(log_dir)
     config, env, sess, policy = eu.setup(exp, single_threaded=False)
     master = Master(master_redis_config)
@@ -48,20 +61,6 @@ def run_master(master_redis_config, log_dir, exp):
     #if 'init_from' in exp['policy']:
     #    logger.info('Initializing weights from {}'.format(exp['policy']['init_from']))
     #    policy.initialize_from(exp['policy']['init_from'], ob_stat)
-
-    #if config.episode_cutoff_mode.startswith('adaptive:'):   # adaptive timestep limit
-    #    _, args = config.episode_cutoff_mode.split(':')
-    #    arg0, arg1, arg2 = args.split(',')
-    #    tslimit, incr_tslimit_threshold, tslimit_incr_ratio = int(arg0), float(arg1), float(arg2)
-    #    adaptive_tslimit = True   # tslimit = timestep limit
-    #    logger.info(
-    #        'Staring timestep limit set to {}. When {}% of rollouts hit the limit, it will be increased by {}'.format(
-    #            tslimit, incr_tslimit_threshold * 100, tslimit_incr_ratio))
-    #elif config.episode_cutoff_mode == 'env_default':   # no tslimit by default
-    #    tslimit, incr_tslimit_threshold, tslimit_incr_ratio = None, None, None
-    #    adaptive_tslimit = False
-    #else:
-    #    raise NotImplementedError(config.episode_cutoff_mode)
 
     episodes_so_far = 0
     timesteps_so_far = 0
@@ -77,14 +76,13 @@ def run_master(master_redis_config, log_dir, exp):
             params=theta,
             ob_mean=ob_stat.mean if policy.needs_ob_stat else None,
             ob_std=ob_stat.std if policy.needs_ob_stat else None,
-            #timestep_limit=tslimit
         ))
         tlogger.log('********** Iteration {} **********'.format(curr_task_id))
 
         # Pop off results for the current task
         curr_task_results, eval_rets, eval_lens, worker_ids = [], [], [], []
-        num_results_skipped, num_episodes_popped, num_timesteps_popped, ob_count_this_batch = 0, 0, 0, 0
-        while num_episodes_popped < config.episodes_per_batch or num_timesteps_popped < config.timesteps_per_batch:
+        num_results_skipped, num_episodes_popped, ob_count_this_batch = 0, 0, 0
+        while num_episodes_popped < config.episodes_per_batch:
             # Wait for a result
             task_id, result = master.pop_result()
             assert isinstance(task_id, int) and isinstance(result, eu.Result)
@@ -113,7 +111,6 @@ def run_master(master_redis_config, log_dir, exp):
                 if task_id == curr_task_id:
                     curr_task_results.append(result)
                     num_episodes_popped += result_num_eps
-                    num_timesteps_popped += result_num_timesteps
                     # Update ob stats
                     if policy.needs_ob_stat and result.ob_count > 0:
                         ob_stat.increment(result.ob_sum, result.ob_sumsq, result.ob_count)
@@ -124,7 +121,7 @@ def run_master(master_redis_config, log_dir, exp):
         # Compute skip fraction
         frac_results_skipped = num_results_skipped / (num_results_skipped + len(curr_task_results))
         if num_results_skipped > 0:
-            logger.warning('Skipped {} out of date results ({:.2f}%)'.format(
+            logging.warning('Skipped {} out of date results ({:.2f}%)'.format(
                 num_results_skipped, 100. * frac_results_skipped))
 
         # Assemble results
@@ -154,12 +151,6 @@ def run_master(master_redis_config, log_dir, exp):
         # Update ob stat (we're never running the policy in the master, but we might be snapshotting the policy)
         if policy.needs_ob_stat:
             policy.set_ob_stat(ob_stat.mean, ob_stat.std)
-
-        # Update number of steps to take
-        #if adaptive_tslimit and (lengths_n2 == tslimit).mean() >= incr_tslimit_threshold:
-        #    old_tslimit = tslimit
-        #    tslimit = int(tslimit_incr_ratio * tslimit)
-        #    logger.info('Increased timestep limit from {} to {}'.format(old_tslimit, tslimit))
 
         step_tend = time.time()
         tlogger.record_tabular("EpRewMean", returns_n2.mean())
@@ -208,11 +199,11 @@ class Master:
     def __init__(self, master_redis_config):
         self.task_counter = 0   # for keeping track of number of workers running
         self.master_redis = retry_connect(master_redis_config)
-        logger.info('[master] Connected to Redis {}'.format(self.master_redis))
+        logging.info('[master] Connected to Redis {}'.format(self.master_redis))
 
     def declare_experiment(self, exp):
         self.master_redis.set(EXP_KEY, pickle.dumps(exp, protocol=-1))   # storing the experiment
-        logger.info('[master] Declared experiment {}'.format(pformat(exp)))
+        logging.info('[master] Declared experiment {}'.format(pformat(exp)))
 
     def declare_task(self, task_data):   # pass data and task to new worker?
         task_id = self.task_counter
@@ -224,11 +215,11 @@ class Master:
          .mset({TASK_ID_KEY: task_id, TASK_DATA_KEY: serialized_task_data})
          .publish(TASK_CHANNEL, pickle.dumps((task_id, serialized_task_data), protocol=-1))
          .execute())
-        logger.debug('[master] Declared task {}'.format(task_id))
+        logging.debug('[master] Declared task {}'.format(task_id))
         return task_id
 
     def pop_result(self):
         # get task data and result from most recently returned worker
         task_id, result = pickle.loads(self.master_redis.blpop(RESULTS_KEY)[1])
-        logger.debug('[master] Popped a result for task {}'.format(task_id))
+        logging.debug('[master] Popped a result for task {}'.format(task_id))
         return task_id, result

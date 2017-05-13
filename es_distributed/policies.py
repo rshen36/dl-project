@@ -39,7 +39,7 @@ class Policy:
             logger.info('- {} shape:{} size:{}'.format(v.name, shp, np.prod(shp)))
 
         placeholders = [tf.placeholder(v.value().dtype, v.get_shape().as_list()) for v in self.all_variables]
-        self.set_all_vars = U.function(   # ???
+        self.set_all_vars = U.function(
             inputs=placeholders,
             outputs=[],
             updates=[tf.group(*[v.assign(p) for v, p in zip(self.all_variables, placeholders)])]
@@ -53,8 +53,6 @@ class Policy:
         with h5py.File(filename, 'w') as f:
             for v in self.all_variables:
                 f[v.name] = v.eval()   # evaluating the tf variable?
-            # TODO: it would be nice to avoid pickle, but it's convenient to pass Python objects to _initialize
-            # (like Gym spaces or numpy arrays)
             f.attrs['name'] = type(self).__name__
             f.attrs['args_and_kwargs'] = np.void(pickle.dumps((self.args, self.kwargs), protocol=-1))   # ???
 
@@ -70,22 +68,16 @@ class Policy:
 
     # === Rollouts/training ===
 
-    # note: '*' argument is to force the passing of named arguments <-- only in Python 3
-    # TODO: figure out Python 2.7 equivalent
-    #def rollout(self, env, *, render=False, timestep_limit=None, save_obs=False, random_stream=None):
-    def rollout(self, env, render=False, timestep_limit=None, save_obs=False, random_stream=None):
+    def rollout(self, env, render=False, save_obs=False, random_stream=None):
         """
         If random_stream is provided, the rollout will take noisy actions with noise drawn from that stream.
         Otherwise, no action noise will be added.
         """
-        #env_timestep_limit = env.spec.tags.get('wrapper_config.TimeLimit.max_episode_steps')   # ???
-        #timestep_limit = env_timestep_limit if timestep_limit is None else min(timestep_limit, env_timestep_limit)
         rews = []
         t = 0
         if save_obs:
             obs = []
         ob = env.reset()
-        #for _ in range(timestep_limit):
         while True:
             ac = self.act(np.squeeze(ob[None]), random_stream=random_stream)[0]
             if save_obs:

@@ -6,7 +6,8 @@
     "l2coeff": 0.005,
     "noise_stdev": 0.02,
     "snapshot_freq": 10,
-    "return_proc_mode": "centered_rank"
+    "return_proc_mode": "centered_rank",
+    "episode_cutoff_mode": "env_default"
   },
   "env_id": "Go19x19-v0",
   "exp_prefix": "test",
