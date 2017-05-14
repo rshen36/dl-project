@@ -172,8 +172,8 @@ def run_master(master_redis_cfg, log_dir, exp):
 
         # Pop off results for the current task
         curr_task_results, eval_rets, eval_lens, worker_ids = [], [], [], []
-        num_results_skipped, num_episodes_popped, ob_count_this_batch = 0, 0, 0
-        while num_episodes_popped < config.episodes_per_batch:
+        num_results_skipped, num_episodes_popped, num_timesteps_popped, ob_count_this_batch = 0, 0, 0, 0
+        while num_episodes_popped < config.episodes_per_batch or num_timesteps_popped < config.timesteps_per_batch:
             # Wait for a result
             task_id, result = master.pop_result()
             assert isinstance(task_id, int) and isinstance(result, Result)
@@ -202,6 +202,7 @@ def run_master(master_redis_cfg, log_dir, exp):
                 if task_id == curr_task_id:
                     curr_task_results.append(result)
                     num_episodes_popped += result_num_eps
+                    num_timesteps_popped += result_num_timesteps
                     # Update ob stats
                     if policy.needs_ob_stat and result.ob_count > 0:
                         ob_stat.increment(result.ob_sum, result.ob_sumsq, result.ob_count)
