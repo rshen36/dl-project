@@ -89,7 +89,9 @@ class Policy:
             t += 1
             if render:
                 env.render()
-            if done:
+            #if done:
+            #    break
+            if np.abs(rew) == 1:
                 break
         rews = np.array(rews, dtype=np.float32)
         logger.info('Rewards: {}'.format(rews))
