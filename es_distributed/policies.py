@@ -173,6 +173,7 @@ class GoPolicy(Policy):
         If random_stream is provided, the rollout will take noisy actions with noise drawn from that stream.
         Otherwise, no action noise will be added.
         """
+        rews = []
         t = 0
         if save_obs:
             obs = []
@@ -185,15 +186,17 @@ class GoPolicy(Policy):
                 ac = ac.argmax()  # want the argmax?
             if save_obs:
                 obs.append(ob)
-            ob, rew, _, _ = env.step(ac)  # for now, not using done signal
+            ob, rew, done, _ = env.step(ac)
+            rews.append(rew)
             t += 1
             if render:
                 env.render()
-            if np.abs(rew) == 1:  # should help avoid weird mean 0 reward bug?
+            if done:  # should help avoid weird mean 0 reward bug?
                 break
+        rews = np.array(rews, dtype=np.float32)
         if save_obs:
-            return rew, t, np.array(obs)
-        return rew, t
+            return rews, t, np.array(obs)
+        return rews, t
 
     def act(self, ob, random_stream=None):
         a = self._act(ob)

@@ -31,20 +31,13 @@ def cli():
 
 
 @cli.command()
-@click.option('--exp_str')
 @click.option('--exp_file')
 @click.option('--master_socket_path', required=True)
 @click.option('--log_dir')
-def master(exp_str, exp_file, master_socket_path, log_dir):
+def master(exp_file, master_socket_path, log_dir):
     # Start the master
-    assert (exp_str is None) != (exp_file is None), 'Must provide exp_str xor exp_file to the master'
-    if exp_str:
-        exp = json.loads(exp_str)   # load experiment configuration
-    elif exp_file:
-        with open(exp_file, 'r') as f:
-            exp = json.loads(f.read())
-    else:
-        assert False
+    with open(exp_file, 'r') as f:
+        exp = json.loads(f.read())
     log_dir = os.path.expanduser(log_dir) if log_dir else '/tmp/es_master_{}'.format(os.getpid())
     mkdir_p(log_dir)
     run_master({'unix_socket_path': master_socket_path}, log_dir, exp)
@@ -57,7 +50,6 @@ def master(exp_str, exp_file, master_socket_path, log_dir):
 @click.option('--num_workers', type=int, default=0)
 def workers(master_socket_path, relay_socket_path, num_workers):
     # Start the relay
-    #master_redis_cfg = {'host': master_host, 'port': master_port}
     master_redis_cfg = {'unix_socket_path': master_socket_path}
     relay_redis_cfg = {'unix_socket_path': relay_socket_path}
     if os.fork() == 0:

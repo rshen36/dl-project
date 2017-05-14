@@ -121,13 +121,13 @@ class RelayClient:
         while True:
             results = []
             start_time = curr_time = time.time()
-            while curr_time - start_time < 0.1:  # need to raise this number?
+            while curr_time - start_time < 0.001:  # need to raise this number?
                 results.append(self.local_redis.blpop(RESULTS_KEY)[1])
                 curr_time = time.time()
             self.master_redis.rpush(RESULTS_KEY, *results)
             # Log
             batch_sizes.append(len(results))
-            if curr_time - last_print_time > 10.0:  # need to raise this number?
+            if curr_time - last_print_time > 5.0:  # need to raise this number?
                 logger.info('[relay] Average batch size {:.3f}'.format(sum(batch_sizes) / len(batch_sizes)))
                 last_print_time = curr_time
 

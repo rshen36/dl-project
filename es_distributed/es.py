@@ -289,11 +289,11 @@ def run_master(master_redis_cfg, log_dir, exp):
 
 def rollout_and_update_ob_stat(policy, env, rs, task_ob_stat, calc_obstat_prob):
     if policy.needs_ob_stat and calc_obstat_prob != 0 and rs.rand() < calc_obstat_prob:   # why a probability?
-        rollout_rew, rollout_len, obs = policy.rollout(env, save_obs=True, random_stream=rs)
+        rollout_rews, rollout_len, obs = policy.rollout(env, save_obs=True, random_stream=rs)
         task_ob_stat.increment(obs.sum(axis=0), np.square(obs).sum(axis=0), len(obs))
     else:
-        rollout_rew, rollout_len = policy.rollout(env, random_stream=rs)
-    return rollout_rew, rollout_len
+        rollout_rews, rollout_len = policy.rollout(env, random_stream=rs)
+    return rollout_rews, rollout_len
 
 
 def run_worker(relay_redis_cfg, noise, min_task_runtime=1.):  # what should min_task_runtime default be?
@@ -317,7 +317,8 @@ def run_worker(relay_redis_cfg, noise, min_task_runtime=1.):  # what should min_
         if rs.rand() < config.eval_prob:
             # Evaluation: noiseless weights and noiseless actions
             policy.set_trainable_flat(task_data.params)
-            eval_return, eval_length = policy.rollout(env)
+            eval_rews, eval_length = policy.rollout(env)
+            eval_return = eval_rews.sum()
             logger.info('Eval result: task={} return={:3f} length={}'.format(task_id, eval_return, eval_length))
             worker.push_result(task_id, Result(
                 worker_id=worker_id,
@@ -342,17 +343,17 @@ def run_worker(relay_redis_cfg, noise, min_task_runtime=1.):  # what should min_
 
                 # finite differences (adding and subtracting v)?
                 policy.set_trainable_flat(task_data.params + v)
-                return_pos, len_pos = rollout_and_update_ob_stat(
+                rews_pos, len_pos = rollout_and_update_ob_stat(
                     policy, env, rs, task_ob_stat, config.calc_obstat_prob)
 
                 policy.set_trainable_flat(task_data.params - v)
-                return_neg, len_neg = rollout_and_update_ob_stat(
+                rews_neg, len_neg = rollout_and_update_ob_stat(
                     policy, env, rs, task_ob_stat, config.calc_obstat_prob)
 
                 # want to keep track of sign returns bc of way fd calculated?
                 noise_inds.append(noise_idx)
-                returns.append([return_pos, return_neg])
-                signreturns.append([np.sign(return_pos).sum(), np.sign(return_neg).sum()])
+                returns.append([rews_pos.sum(), rews_neg.sum()])
+                signreturns.append([np.sign(rews_pos).sum(), np.sign(rews_neg).sum()])
                 lengths.append([len_pos, len_neg])
 
             worker.push_result(task_id, Result(
