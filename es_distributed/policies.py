@@ -92,6 +92,7 @@ class Policy:
             if done:
                 break
         rews = np.array(rews, dtype=np.float32)
+        logger.info('Rewards: {}'.format(rews))
         if save_obs:
             return rews, t, np.array(obs)
         return rews, t

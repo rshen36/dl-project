@@ -319,6 +319,7 @@ def run_worker(relay_redis_cfg, noise, min_task_runtime=1.):  # what should min_
             policy.set_trainable_flat(task_data.params)
             eval_rews, eval_length = policy.rollout(env)
             eval_return = eval_rews.sum()
+            logger.info('Eval rewards: {}'.format(eval_rews))
             logger.info('Eval result: task={} return={:3f} length={}'.format(task_id, eval_return, eval_length))
             worker.push_result(task_id, Result(
                 worker_id=worker_id,
