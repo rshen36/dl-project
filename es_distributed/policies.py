@@ -194,7 +194,9 @@ class GoPolicy(Policy):
             t += 1
             if render:
                 env.render()
-            if done:  # should help avoid weird mean 0 reward bug?
+            # if done:
+            #     break
+            if np.abs(rew) == 1:  # should help avoid weird mean 0 reward bug?
                 break
         rews = np.array(rews, dtype=np.float32)
         if save_obs:
