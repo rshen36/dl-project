@@ -10,8 +10,9 @@ from .dist import MasterClient, WorkerClient
 logger = logging.getLogger(__name__)
 
 Config = namedtuple('Config', [
-    'l2coeff', 'noise_stdev', 'episodes_per_batch',
-    'calc_obstat_prob', 'eval_prob', 'snapshot_freq', 'return_proc_mode'
+    'l2coeff', 'noise_stdev', 'episodes_per_batch', 'timesteps_per_batch',
+    'calc_obstat_prob', 'eval_prob', 'snapshot_freq',
+    'return_proc_mode', 'episode_cutoff_mode'
 ])
 Task = namedtuple('Task', ['params', 'ob_mean', 'ob_std'])
 Result = namedtuple('Result', [
