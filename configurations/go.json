@@ -23,11 +23,10 @@
       "ac_noise_std": 0.01,
       "connection_type": "ff",
       "hidden_dims": [
-        1024,
-        1024,
-        1024
+        512,
+        512
       ],
-      "nonlin_type": "lrelu"
+      "nonlin_type": "tanh"
     },
     "type": "GoPolicy"
   }

@@ -56,7 +56,7 @@ class Policy:
             # TODO: it would be nice to avoid pickle, but it's convenient to pass Python objects to _initialize
             # (like Gym spaces or numpy arrays)
             f.attrs['name'] = type(self).__name__
-            f.attrs['args_and_kwargs'] = np.void(pickle.dumps((self.args, self.kwargs), protocol=-1))   # ???
+            #f.attrs['args_and_kwargs'] = np.void(pickle.dumps((self.args, self.kwargs), protocol=-1))   # ???
 
     @classmethod
     def Load(cls, filename, extra_kwargs=None):
