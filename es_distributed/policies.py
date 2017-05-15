@@ -89,10 +89,8 @@ class Policy:
             t += 1
             if render:
                 env.render()
-            #if done:
-            #    break
-            if np.abs(rew) == 1:
-                break
+            if done:
+               break
         rews = np.array(rews, dtype=np.float32)
         logger.info('Rewards: {}'.format(rews))
         if save_obs:
@@ -123,7 +121,6 @@ class Policy:
 #     return tf.argmax(scores_nab, 2)   # 0 ... num_bins-1
 
 
-# for now, just try to learn Go9x9
 class GoPolicy(Policy):
     # ob_space = Box(3, 19, 19)
     # ac_space = Discrete(363)   19*19 + 2
@@ -170,7 +167,6 @@ class GoPolicy(Policy):
         a = U.dense(x, adim, 'out', U.normc_initializer(0.01))
         return a
 
-    # only interested in last scalar reward (-1 or 1)
     def rollout(self, env, render=False, save_obs=False, random_stream=None):
         """
         If random_stream is provided, the rollout will take noisy actions with noise drawn from that stream.
@@ -196,7 +192,100 @@ class GoPolicy(Policy):
                 env.render()
             # if done:
             #     break
-            if np.abs(rew) == 1:  # should help avoid weird mean 0 reward bug?
+            if np.abs(rew) == 1:  # helps avoid weird zero return bugs
+                break
+        rews = np.array(rews, dtype=np.float32)
+        if save_obs:
+            return rews, t, np.array(obs)
+        return rews, t
+
+    def act(self, ob, random_stream=None):
+        a = self._act(ob)
+        if random_stream is not None and self.ac_noise_std != 0:
+            a += random_stream.randn(*a.shape) * self.ac_noise_std
+        return a   # softmax vector
+
+    @property
+    def needs_ob_stat(self):   # necessary for GoEnv?
+        return True
+
+    @property
+    def needs_ref_batch(self):   # necessary for GoEnv?
+        return False
+
+    def set_ob_stat(self, ob_mean, ob_std):
+        self._set_ob_mean_std(ob_mean, ob_std)
+
+    #def initialize_from(self, filename, ob_stat=None):
+
+
+class PongPolicy(Policy):
+    # ob_space = Box(210, 160, 3)  # pixels most likely
+    # ac_space = Discrete(6)
+    def _initialize(self, ob_space, ac_space, ac_noise_std, nonlin_type, hidden_dims, connection_type):
+        self.ac_space = ac_space
+        self.ac_noise_std = ac_noise_std
+        self.hidden_dims = hidden_dims
+        self.connection_type = connection_type
+
+        # what is [nonlin_type] doing here? also wtf is an elu?
+        self.nonlin = {'tanh': tf.tanh, 'relu': tf.nn.relu, 'lrelu': U.lrelu, 'elu': tf.nn.elu}[nonlin_type]
+
+        with tf.variable_scope(type(self).__name__) as scope:
+            # Observation normalization <-- is this necessary for Go?
+            ob_mean = tf.get_variable(
+                'ob_mean', ob_space.shape, tf.float32, tf.constant_initializer(np.nan), trainable=False)
+            ob_std = tf.get_variable(
+                'ob_std', ob_space.shape, tf.float32, tf.constant_initializer(np.nan), trainable=False)
+            # what are in_mean and in_std? batch-specific statistics?
+            in_mean = tf.placeholder(tf.float32, ob_space.shape)
+            in_std = tf.placeholder(tf.float32, ob_space.shape)
+            self._set_ob_mean_std = U.function([in_mean, in_std], [], updates=[
+                tf.assign(ob_mean, in_mean),
+                tf.assign(ob_std, in_std),
+            ])
+
+            # Policy network
+            o = tf.placeholder(tf.float32, list(ob_space.shape))   # o = input placeholder variable?
+            a = self._make_net(tf.clip_by_value((o - ob_mean) / ob_std, -5.0, 5.0))
+            self._act = U.function([o], a)   # pass o to nn a?
+        return scope
+
+    def _make_net(self, o):
+        # Process observation
+        if self.connection_type == 'ff':
+            x = o
+            for ilayer, hd in enumerate(self.hidden_dims):
+                x = self.nonlin(U.dense(x, hd, 'l{}'.format(ilayer), U.normc_initializer(1.0)))
+        else:
+            raise NotImplementedError(self.connection_type)
+
+        # Map to action
+        adim = self.ac_space.n
+        a = U.dense(x, adim, 'out', U.normc_initializer(0.01))
+        return a
+
+    def rollout(self, env, render=False, save_obs=False, random_stream=None):
+        """
+        If random_stream is provided, the rollout will take noisy actions with noise drawn from that stream.
+        Otherwise, no action noise will be added.
+        """
+        rews = []
+        t = 0
+        if save_obs:
+            obs = []
+        ob = env.reset()
+        while True:
+            ac = self.act(np.squeeze(ob[None]), random_stream=random_stream)[0]
+            ac = ac.argmax()
+            if save_obs:
+                obs.append(ob)
+            ob, rew, done, _ = env.step(ac)
+            rews.append(rew)
+            t += 1
+            if render:
+                env.render()
+            if done:
                 break
         rews = np.array(rews, dtype=np.float32)
         if save_obs:
