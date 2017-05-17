@@ -3,7 +3,7 @@ import os
 
 
 if __name__ == "__main__":
-    dir_path = os.path.dirname(os.path.realpath(__file__))
+    dir_path = os.getcwd()
 
     master(exp_file=dir_path+"configurations/pong.json",
            master_socket_path="/tmp/es_redis_master.sock",
