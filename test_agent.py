@@ -1,9 +1,13 @@
 from es_distributed.main import master, workers
+import os
+
 
 if __name__ == "__main__":
-    master(exp_file="configurations/pong.json",
+    dir_path = os.path.dirname(os.path.realpath(__file__))
+
+    master(exp_file=dir_path+"configurations/pong.json",
            master_socket_path="/tmp/es_redis_master.sock",
-           log_dir="results/pong2/")
+           log_dir=dir_path+"results/pong2/")
 
     workers(master_socket_path="/tmp/es_redis_master.sock",
            relay_socket_path="/tmp/es_redis_relay.sock",
