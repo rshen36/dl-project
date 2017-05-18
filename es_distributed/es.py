@@ -7,6 +7,8 @@ import numpy as np
 
 from .dist import MasterClient, WorkerClient
 
+
+logging.basicConfig(filename='es.log', level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 Config = namedtuple('Config', [

@@ -12,6 +12,7 @@ except ImportError:
 
 import redis
 
+logging.basicConfig(filename='dist.log',level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 EXP_KEY = 'es:exp'
