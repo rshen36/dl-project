@@ -12,6 +12,7 @@ import tensorflow as tf
 
 from es_distributed import tf_util as U
 
+logging.basicConfig(filename='experiment.log', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 #TODO: implement other Env classes
