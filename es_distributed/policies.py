@@ -16,6 +16,10 @@ logger = logging.getLogger(__name__)
 
 #TODO: implement other Env classes
 
+# worth it to try and adapt everything for Universe and Gym? or just stick with Gym + wrappers?
+# probably more time effective to just use Gym and mupen64 wrapper?
+# nevermind mupen64 can fuck off; let's try universe
+
 
 class Policy:
     def __init__(self, *args, **kwargs):
