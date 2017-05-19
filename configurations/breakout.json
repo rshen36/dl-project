@@ -10,8 +10,8 @@
     "return_proc_mode": "centered_rank",
     "episode_cutoff_mode": "env_default"
   },
-  "env_id": "Pong-v0",
-  "exp_prefix": "pong",
+  "env_id": "Breakout-v0",
+  "exp_prefix": "breakout",
   "optimizer": {
     "args": {
       "stepsize": 0.01

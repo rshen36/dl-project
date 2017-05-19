@@ -219,7 +219,8 @@ class GoPolicy(Policy):
     #def initialize_from(self, filename, ob_stat=None):
 
 
-class PongPolicy(Policy):
+# so far, only tested on Pong and Breakout (for which the ob_space and ac_space are the same structure)
+class AtariPolicy(Policy):
     # ob_space = Box(210, 160, 3)  # pixels most likely
     # ac_space = Discrete(6)
     def _initialize(self, ob_space, ac_space, ac_noise_std, nonlin_type, hidden_dims, connection_type):
@@ -228,11 +229,11 @@ class PongPolicy(Policy):
         self.hidden_dims = hidden_dims
         self.connection_type = connection_type
 
-        # what is [nonlin_type] doing here? also wtf is an elu?
+        # what is [nonlin_type] doing here?
         self.nonlin = {'tanh': tf.tanh, 'relu': tf.nn.relu, 'lrelu': U.lrelu, 'elu': tf.nn.elu}[nonlin_type]
 
         with tf.variable_scope(type(self).__name__) as scope:
-            # Observation normalization <-- is this necessary for Go?
+            # Observation normalization
             ob_mean = tf.get_variable(
                 'ob_mean', ob_space.shape, tf.float32, tf.constant_initializer(np.nan), trainable=False)
             ob_std = tf.get_variable(
@@ -299,11 +300,11 @@ class PongPolicy(Policy):
         return a   # softmax vector
 
     @property
-    def needs_ob_stat(self):   # necessary for GoEnv?
+    def needs_ob_stat(self):   # necessary?
         return True
 
     @property
-    def needs_ref_batch(self):   # necessary for GoEnv?
+    def needs_ref_batch(self):   # necessary?
         return False
 
     def set_ob_stat(self, ob_mean, ob_std):
