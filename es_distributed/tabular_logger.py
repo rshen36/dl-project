@@ -27,14 +27,14 @@ class TbWriter(object):
     """
     def __init__(self, dir, prefix):
         self.dir = dir
-        self.step = 1 # Start at 1, because EvWriter automatically generates an object with step=0 ?
+        self.step = 1  # Start at 1, because EvWriter automatically generates an object with step=0 ?
         self.evwriter = pywrap_tensorflow.EventsWriter(compat.as_bytes(os.path.join(dir, prefix)))
     # TODO: look into tf's EventsWriter
     def write_values(self, key2val):
         summary = tf.Summary(value=[tf.Summary.Value(tag=k, simple_value=float(v))
-            for (k, v) in key2val.items()])   # ???
+            for (k, v) in key2val.items()])
         event = event_pb2.Event(wall_time=time.time(), summary=summary)   # ???
-        event.step = self.step # is there any reason why you'd want to specify the step?
+        event.step = self.step  # is there any reason why you'd want to specify the step?
         self.evwriter.WriteEvent(event)
         self.evwriter.Flush()
         self.step += 1
@@ -126,7 +126,6 @@ class _Logger(object):
         self.dir = dir
         self.text_outputs = [sys.stdout]
         if dir is not None:
-            #os.makedirs(dir, exist_ok=True)
             if not os.path.exists(dir): os.makedirs(dir)
             self.text_outputs.append(open(os.path.join(dir, "log.txt"), "w"))
             self.tbwriter = TbWriter(dir=dir, prefix="events")
@@ -144,10 +143,9 @@ class _Logger(object):
             if hasattr(val, "__float__"): valstr = "%-8.3g"%val
             else: valstr = val
             key2str[self._truncate(key)]=self._truncate(valstr)
-        keywidth = max(map(len, key2str.keys()))   # ???
-        valwidth = max(map(len, key2str.values()))   # ???
+        keywidth = max(map(len, key2str.keys()))
+        valwidth = max(map(len, key2str.values()))
         # Write to all text outputs
-        # What is this shit
         self._write_text("-"*(keywidth+valwidth+7), "\n")
         for (key, val) in key2str.items():
             self._write_text("| ", key, " "*(keywidth-len(key)), " | ", val, " "*(valwidth-len(val)), " |\n")
@@ -155,7 +153,7 @@ class _Logger(object):
         for f in self.text_outputs:
             try: f.flush()
             except OSError: sys.stderr.write('Warning! OSError when flushing.\n')   # why would there be an OSError?
-        # Write to tensorboard ?
+        # Write to tensorboard
         if self.tbwriter is not None:
             self.tbwriter.write_values(self.name2val)
             self.name2val.clear()

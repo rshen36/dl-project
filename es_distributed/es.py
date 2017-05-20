@@ -278,7 +278,7 @@ def run_master(master_redis_cfg, log_dir, exp):
         tlogger.record_tabular("TimeElapsed", step_tend - tstart)
         tlogger.dump_tabular()
 
-        # save a snapshot of the policy?
+        # save a snapshot of the policy
         if config.snapshot_freq != 0 and curr_task_id % config.snapshot_freq == 0:
             import os.path as osp
             filename = osp.join(tlogger.get_dir(), 'snapshot_iter{:05d}_rew{}.h5'.format(
