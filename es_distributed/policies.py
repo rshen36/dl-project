@@ -15,12 +15,6 @@ from es_distributed import tf_util as U
 logging.basicConfig(filename='experiment.log', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-#TODO: implement other Env classes
-
-# worth it to try and adapt everything for Universe and Gym? or just stick with Gym + wrappers?
-# probably more time effective to just use Gym and mupen64 wrapper?
-# nevermind mupen64 can fuck off; let's try universe
-
 
 class Policy:
     def __init__(self, *args, **kwargs):
@@ -119,6 +113,9 @@ class Policy:
         raise NotImplementedError
 
 
+
+
+
 # for continuous action spaces
 # def bins(x, dim, num_bins, name):
 #     scores = U.dense(x, dim * num_bins, name, U.normc_initializer(0.01))
@@ -135,7 +132,7 @@ class GoPolicy(Policy):
         self.hidden_dims = hidden_dims
         self.connection_type = connection_type
 
-        # what is [nonlin_type] doing here? also wtf is an elu?
+        # what is [nonlin_type] doing here?
         self.nonlin = {'tanh': tf.tanh, 'relu': tf.nn.relu, 'lrelu': U.lrelu, 'elu': tf.nn.elu}[nonlin_type]
 
         with tf.variable_scope(type(self).__name__) as scope:
@@ -144,7 +141,6 @@ class GoPolicy(Policy):
                 'ob_mean', ob_space.shape, tf.float32, tf.constant_initializer(np.nan), trainable=False)
             ob_std = tf.get_variable(
                 'ob_std', ob_space.shape, tf.float32, tf.constant_initializer(np.nan), trainable=False)
-            # what are in_mean and in_std? batch-specific statistics?
             in_mean = tf.placeholder(tf.float32, ob_space.shape)
             in_std = tf.placeholder(tf.float32, ob_space.shape)
             self._set_ob_mean_std = U.function([in_mean, in_std], [], updates=[
@@ -184,10 +180,7 @@ class GoPolicy(Policy):
         ob = env.reset()
         while True:
             ac = self.act(np.squeeze(ob[None]), random_stream=random_stream)[0]
-            if (ac.argmax()) == self.ac_space.n-1:
-                ac = np.random.randint(0, self.ac_space.n-2)  # force agent to not resign
-            else:
-                ac = ac.argmax()  # want the argmax?
+            ac = ac.argmax()  # want the argmax?
             if save_obs:
                 obs.append(ob)
             ob, rew, done, _ = env.step(ac)
@@ -195,9 +188,7 @@ class GoPolicy(Policy):
             t += 1
             if render:
                 env.render()
-            # if done:
-            #     break
-            if np.abs(rew) == 1:  # helps avoid weird zero return bugs
+            if np.abs(rew) == 1:  # helps avoid weird zero return bug
                 break
         rews = np.array(rews, dtype=np.float32)
         if save_obs:
@@ -243,7 +234,6 @@ class AtariPolicy(Policy):
                 'ob_mean', ob_space.shape, tf.float32, tf.constant_initializer(np.nan), trainable=False)
             ob_std = tf.get_variable(
                 'ob_std', ob_space.shape, tf.float32, tf.constant_initializer(np.nan), trainable=False)
-            # what are in_mean and in_std? batch-specific statistics?
             in_mean = tf.placeholder(tf.float32, ob_space.shape)
             in_std = tf.placeholder(tf.float32, ob_space.shape)
             self._set_ob_mean_std = U.function([in_mean, in_std], [], updates=[
@@ -270,33 +260,6 @@ class AtariPolicy(Policy):
         adim = self.ac_space.n
         a = U.dense(x, adim, 'out', U.normc_initializer(0.01))
         return a
-
-    def rollout(self, env, render=False, save_obs=False, random_stream=None):
-        """
-        If random_stream is provided, the rollout will take noisy actions with noise drawn from that stream.
-        Otherwise, no action noise will be added.
-        """
-        rews = []
-        t = 0
-        if save_obs:
-            obs = []
-        ob = env.reset()
-        while True:
-            ac = self.act(np.squeeze(ob[None]), random_stream=random_stream)[0]
-            ac = ac.argmax()
-            if save_obs:
-                obs.append(ob)
-            ob, rew, done, _ = env.step(ac)
-            rews.append(rew)
-            t += 1
-            if render:
-                env.render()
-            if done:
-                break
-        rews = np.array(rews, dtype=np.float32)
-        if save_obs:
-            return rews, t, np.array(obs)
-        return rews, t
 
     def act(self, ob, random_stream=None):
         a = self._act(ob)

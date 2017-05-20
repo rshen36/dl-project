@@ -52,7 +52,7 @@ class RunningStat(object):   # declares the class to be a new-style class
 
 class SharedNoiseTable(object):   # sharing same noise among all workers
     def __init__(self):
-        import ctypes, multiprocessing   # ???
+        import ctypes, multiprocessing
         seed = 123
 
         # may need to adapt this number
@@ -285,7 +285,6 @@ def run_master(master_redis_cfg, log_dir, exp):
                 curr_task_id,
                 np.nan if not eval_rets else int(np.mean(eval_rets))
             ))
-            #assert not osp.exists(filename)
             policy.save(filename)
             tlogger.log('Saved snapshot {}'.format(filename))
 

@@ -15,10 +15,8 @@ clip = tf.clip_by_value
 # ----------------------------------------
 
 def sum(x, axis=None, keepdims=False):
-    # What exactly does reduce_sum do generally?
     return tf.reduce_sum(x, reduction_indices=None if axis is None else [axis], keep_dims=keepdims)
 def mean(x, axis=None, keepdims=False):
-    # What exactly does reduce_mean do generally?
     return tf.reduce_mean(x, reduction_indices=None if axis is None else [axis], keep_dims=keepdims)
 def var(x, axis=None, keepdims=False):
     meanx = mean(x, axis=axis, keepdims=keepdims)
@@ -26,10 +24,8 @@ def var(x, axis=None, keepdims=False):
 def std(x, axis=None, keepdims=False):
     return tf.sqrt(var(x, axis=axis, keepdims=keepdims))
 def max(x, axis=None, keepdims=False):
-    # What exactly does reduce_max do generally?
     return tf.reduce_max(x, reduction_indices=None if axis is None else [axis], keep_dims=keepdims)
 def min(x, axis=None, keepdims=False):
-    # What exactly does reduce_min do generally?
     return tf.reduce_min(x, reduction_indices=None if axis is None else [axis], keep_dims=keepdims)
 def concatenate(arrs, axis=0):
     return tf.concat(axis, arrs)
@@ -66,10 +62,13 @@ def lrelu(x, leak=0.2):
     f1 = 0.5 * (1 + leak)
     f2 = 0.5 * (1 - leak)
     return f1 * x + f2 * abs(x)
-#def categorical_sample_logits(X):   # ???
-    # https://github.com/tensorflow/tensorflow/issues/456
-    #U = tf.random_uniform(tf.shape(X))
-    #return argmax(X - tf.log(-tf.log(U)), axis=1)
+# def categorical_sample_logits(X):  # what's the diff bw this and below?
+#     # https://github.com/tensorflow/tensorflow/issues/456
+#     U = tf.random_uniform(tf.shape(X))
+#     return argmax(X - tf.log(-tf.log(U)), axis=1)
+def categorical_sample(logits, d):
+    value = tf.squeeze(tf.multinomial(logits - max(logits, [1], keepdims=True), [1]))
+    return tf.one_hot(value, d)
 
 # ================================================================
 # Global session
@@ -112,13 +111,14 @@ def save_state(fname):
 # Model components
 # ================================================================
 
-# initialization using standard norm?
+# normalized columns initializer
 def normc_initializer(std=1.0):
-    def _initializer(shape, dtype=None, partition_info=None):   #pylint: disable=W0613 ?
+    def _initializer(shape, dtype=None, partition_info=None):  # pylint: disable=W0613 ?
         out = np.random.randn(*shape).astype(np.float32)
         out *= std / np.sqrt(np.square(out).sum(axis=0, keepdims=True))
         return tf.constant(out)
     return _initializer
+
 
 def dense(x, size, name, weight_init=None, bias=True):
     if len(x.get_shape()) > 2:
@@ -132,6 +132,28 @@ def dense(x, size, name, weight_init=None, bias=True):
         return ret + b
     else:
         return ret
+
+
+def conv2d(x, num_filters, name, filter_size=(3, 3), stride=(1, 1), pad="SAME", dtype=tf.float32, collections=None):
+    with tf.variable_scope(name):
+        stride_shape = [1, stride[0], stride[1], 1]
+        filter_shape = [filter_size[0], filter_size[1], int(x.get_shape()[3]), num_filters]
+
+        # there are "num input feature maps * filter height * filter width"
+        # inputs to each hidden unit
+        fan_in = np.prod(filter_shape[:3])
+        # each unit in the lower layer receives a gradient from:
+        # "num output feature maps * filter height * filter width" /
+        #   pooling size
+        fan_out = np.prod(filter_shape[:2]) * num_filters
+        # initialize weights with random weights
+        w_bound = np.sqrt(6. / (fan_in + fan_out))
+
+        w = tf.get_variable("W", filter_shape, dtype, tf.random_uniform_initializer(-w_bound, w_bound),
+                            collections=collections)
+        b = tf.get_variable("b", [1, 1, 1, num_filters], initializer=tf.constant_initializer(0.0),
+                            collections=collections)
+        return tf.nn.conv2d(x, w, stride_shape, pad) + b
 
 # ================================================================
 # Basic Stuff
@@ -190,12 +212,10 @@ def intprod(x):
     return int(np.prod(x))
 
 def flatgrad(loss, var_list):
-    # TODO: look into how tf's gradients function works
     grads = tf.gradients(loss, var_list)
     return tf.concat(0, [tf.reshape(grad, [numel(v)]) for (v, grad) in zip(var_list, grads)])
 
 
-# why is this necessary?
 class SetFromFlat(object):
     def __init__(self, var_list, dtype=tf.float32):
         shapes = list(map(var_shape, var_list))
@@ -214,10 +234,8 @@ class SetFromFlat(object):
         get_session().run(self.op, feed_dict={self.theta:theta})
 
 
-# why is this necessary?
 class GetFlat(object):
     def __init__(self, var_list):
-        #self.op = tf.concat(0, [tf.reshape(v, [numel(v)]) for v in var_list])  # for tf 0.11
         self.op = tf.concat([tf.reshape(v, [numel(v)]) for v in var_list], 0)  # for tf 0.12
     def __call__(self):
         return get_session().run(self.op)
@@ -259,8 +277,8 @@ def get_placeholder(name, dtype, shape):
 def get_placeholder_cached(name):
     return _PLACEHOLDER_CACHE[name][0]
 
-# why is this necessary?
-def flattenallbut0(x):
+
+def flatten(x):
     return tf.reshape(x, [-1, intprod(x.get_shape().as_list()[1:])])
 
 def reset():

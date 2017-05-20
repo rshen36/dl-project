@@ -32,7 +32,6 @@ class SGD(Optimizer):
         return step
 
 
-# TODO: study Adam
 class Adam(Optimizer):
     def __init__(self, pi, stepsize, beta1=0.9, beta2=0.999, epsilon=1e-08):
         Optimizer.__init__(self, pi)
