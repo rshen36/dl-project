@@ -218,11 +218,10 @@ class GoPolicy(Policy):
 class AtariPolicy(Policy):
     # ob_space = Box(210, 160, 3)  # pixels most likely
     # ac_space = Discrete(6)
-    def _initialize(self, ob_space, ac_space, ac_noise_std, nonlin_type, hidden_dims, connection_type):
+    def _initialize(self, ob_space, ac_space, ac_noise_std, nonlin_type, hidden_dims):
         self.ac_space = ac_space
         self.ac_noise_std = ac_noise_std
         self.hidden_dims = hidden_dims
-        self.connection_type = connection_type
 
         # what is [nonlin_type] doing here?
         self.nonlin = {'tanh': tf.tanh, 'relu': tf.nn.relu, 'lrelu': U.lrelu, 'elu': tf.nn.elu}[nonlin_type]
@@ -241,7 +240,9 @@ class AtariPolicy(Policy):
             ])
 
             # Policy network
-            self.x = x = tf.placeholder(tf.float32, list(ob_space.shape))
+            # below should work as long as input is pixels?
+            # more pre-processing necessary?
+            self.x = x = tf.placeholder(tf.float32, [None] + list(ob_space.shape))
             for ilayer, hd in enumerate(self.hidden_dims):
                 x = self.nonlin(U.conv2d(x, hd, "l{}".format(ilayer), [3, 3], [2, 2]))
             # introduce a "fake" batch dimension of 1 after flatten so that we can do LSTM over time dim
@@ -270,24 +271,52 @@ class AtariPolicy(Policy):
             self.logits = U.dense(x, self.ac_space.n, 'action', U.normc_initializer(0.01))
             #self.vf = tf.reshape(U.dense(x, 1, 'value', U.normc_initializer(1.0)), [-1])
             self.state_out = [lstm_c[:1, :], lstm_h[:1, :]]
-            self.sample = U.categorical_sample(self.logits, self.ac_space)[0, :]
-            self.var_list = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, tf.get_variable_scope().name)
+            self.sample = U.categorical_sample(self.logits, self.ac_space.n)[0, :]
+            #self.var_list = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, tf.get_variable_scope().name)
 
         return scope
 
     def get_initial_features(self):
         return self.state_init
 
-    #def _make_net(self, o):
-
-    def act(self, ob, c, h, random_stream=None):
+    def act(self, ob, c0, h0, random_stream=None):
         sess = U.get_session()
         #a = self._act(ob)
-        a = sess.run([self.sample] + self.state_out,
-                     {self.x: [ob], self.state_in[0]: c, self.state_in[1]: h})
+        a, c1, h1 = sess.run([self.sample] + self.state_out,
+                     {self.x: [ob], self.state_in[0]: c0, self.state_in[1]: h0})
         if random_stream is not None and self.ac_noise_std != 0:
             a += random_stream.randn(*a.shape) * self.ac_noise_std
-        return a   # softmax vector
+        return a, c1, h1   # softmax vector
+
+    def rollout(self, env, render=False, save_obs=False, random_stream=None):
+        """
+        If random_stream is provided, the rollout will take noisy actions with noise drawn from that stream.
+        Otherwise, no action noise will be added.
+        """
+        rews = []
+        t = 0
+        if save_obs:
+            obs = []
+        last_ob = env.reset()
+        last_features = self.get_initial_features()
+        while True:
+            #ac = self.act(np.squeeze(ob[None]), random_stream=random_stream)[0]
+            fetched = self.act(last_ob, *last_features, random_stream=random_stream)
+            ac, last_features = fetched[0], fetched[1:]
+            if save_obs:
+                obs.append(last_ob)
+            last_ob, rew, done, _ = env.step(ac.argmax())  # always want the argmax?
+            rews.append(rew)
+            t += 1
+            if render:
+                env.render()
+            # tensorboard summary?
+            if done:
+                break
+        rews = np.array(rews, dtype=np.float32)
+        if save_obs:
+            return rews, t, np.array(obs)
+        return rews, t
 
     @property
     def needs_ob_stat(self):   # necessary?

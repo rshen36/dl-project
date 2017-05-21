@@ -67,7 +67,7 @@ def lrelu(x, leak=0.2):
 #     U = tf.random_uniform(tf.shape(X))
 #     return argmax(X - tf.log(-tf.log(U)), axis=1)
 def categorical_sample(logits, d):
-    value = tf.squeeze(tf.multinomial(logits - max(logits, [1], keepdims=True), [1]))
+    value = tf.squeeze(tf.multinomial(logits - max(logits, 1, keepdims=True), 1), [1])
     return tf.one_hot(value, d)
 
 # ================================================================

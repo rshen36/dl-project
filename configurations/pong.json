@@ -24,6 +24,7 @@
       "hidden_dims": [
         32,
         32,
+        32,
         32
       ],
       "nonlin_type": "elu"
