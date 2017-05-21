@@ -165,7 +165,7 @@ def env_runner(env, policy, num_local_steps, summary_writer, render):
         yield rollout
 
 
-class LSTMPolicyNetwork(object):
+class LSTMPolicy(object):
     def __init__(self, ob_space, ac_space):
         # equivalent to o?
         self.x = x = tf.placeholder(tf.float32, [None] + list(ob_space))
@@ -230,13 +230,13 @@ class A3C(object):
         worker_device = "/job:worker/task:{}/cpu:0".format(task)
         with tf.device(tf.train.replica_device_setter(1, worker_device=worker_device)):
             with tf.variable_scope("global"):
-                self.network = LSTMPolicyNetwork(env.observation_space.shape, env.action_space.n)
+                self.network = LSTMPolicy(env.observation_space.shape, env.action_space.n)
                 self.global_step = tf.get_variable("global_step", [], tf.int32, initializer=tf.constant_initializer(0, dtype=tf.int32),
                                                    trainable=False)
 
         with tf.device(worker_device):
             with tf.variable_scope("local"):
-                self.local_network = pi = LSTMPolicyNetwork(env.observation_space.shape, env.action_space.n)
+                self.local_network = pi = LSTMPolicy(env.observation_space.shape, env.action_space.n)
                 pi.global_step = self.global_step
 
             self.ac = tf.placeholder(tf.float32, [None, env.action_space.n], name="ac")

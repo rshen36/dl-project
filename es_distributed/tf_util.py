@@ -170,7 +170,7 @@ def function(inputs, outputs, updates=None, givens=None):
         return lambda *inputs : f(*inputs)[0]
 
 
-# why is this necessary?
+# how tf does this work...
 class _Function(object):
     def __init__(self, inputs, outputs, updates, givens, check_nan=False):
         assert all(len(i.op.inputs) == 0 for i in inputs), "inputs should all be placeholders"
@@ -180,7 +180,7 @@ class _Function(object):
         self.outputs_update = list(outputs) + [self.update_group]
         self.givens = {} if givens is None else givens
         self.check_nan = check_nan
-    def __call__(self, *inputvals):   # ???
+    def __call__(self, *inputvals):  # ???
         assert len(inputvals) == len(self.inputs)
         feed_dict = dict(zip(self.inputs, inputvals))
         feed_dict.update(self.givens)

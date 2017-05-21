@@ -9,6 +9,7 @@ except ImportError:
 import h5py   # TODO: study HDF5 / h5py
 import numpy as np
 import tensorflow as tf
+import tensorflow.contrib.rnn as rnn
 
 from es_distributed import tf_util as U
 
@@ -113,9 +114,6 @@ class Policy:
         raise NotImplementedError
 
 
-
-
-
 # for continuous action spaces
 # def bins(x, dim, num_bins, name):
 #     scores = U.dense(x, dim * num_bins, name, U.normc_initializer(0.01))
@@ -154,6 +152,7 @@ class GoPolicy(Policy):
             self._act = U.function([o], a)   # pass o to nn a?
         return scope
 
+    # just copy parameters from parameter server like a separate worker?
     def _make_net(self, o):
         # Process observation
         if self.connection_type == 'ff':
@@ -242,27 +241,50 @@ class AtariPolicy(Policy):
             ])
 
             # Policy network
-            o = tf.placeholder(tf.float32, list(ob_space.shape))   # o = input placeholder variable?
-            a = self._make_net(tf.clip_by_value((o - ob_mean) / ob_std, -5.0, 5.0))
-            self._act = U.function([o], a)   # pass o to nn a?
+            self.x = x = tf.placeholder(tf.float32, list(ob_space.shape))
+            for ilayer, hd in enumerate(self.hidden_dims):
+                x = self.nonlin(U.conv2d(x, hd, "l{}".format(ilayer), [3, 3], [2, 2]))
+            # introduce a "fake" batch dimension of 1 after flatten so that we can do LSTM over time dim
+            x = tf.expand_dims(U.flatten(x), [0])
+
+            # a = self._make_net(tf.clip_by_value((o - ob_mean) / ob_std, -5.0, 5.0))
+            # self._act = U.function([o], a)   # pass o to nn a?
+
+            size = 256  # TODO: include this in Config
+            lstm = rnn.BasicLSTMCell(size, state_is_tuple=True)
+            step_size = tf.shape(self.x)[:1]
+
+            c_init = np.zeros((1, lstm.state_size.c), np.float32)
+            h_init = np.zeros((1, lstm.state_size.h), np.float32)
+            self.state_init = [c_init, h_init]
+            c_in = tf.placeholder(tf.float32, [1, lstm.state_size.c])
+            h_in = tf.placeholder(tf.float32, [1, lstm.state_size.h])
+            self.state_in = [c_in, h_in]
+
+            state_in = rnn.LSTMStateTuple(c_in, h_in)
+            lstm_outputs, lstm_state = tf.nn.dynamic_rnn(
+                lstm, x, initial_state=state_in, sequence_length=step_size,
+                time_major=False)
+            lstm_c, lstm_h = lstm_state
+            x = tf.reshape(lstm_outputs, [-1, size])
+            self.logits = U.dense(x, self.ac_space.n, 'action', U.normc_initializer(0.01))
+            #self.vf = tf.reshape(U.dense(x, 1, 'value', U.normc_initializer(1.0)), [-1])
+            self.state_out = [lstm_c[:1, :], lstm_h[:1, :]]
+            self.sample = U.categorical_sample(self.logits, self.ac_space)[0, :]
+            self.var_list = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, tf.get_variable_scope().name)
+
         return scope
 
-    def _make_net(self, o):
-        # Process observation
-        if self.connection_type == 'ff':
-            x = o
-            for ilayer, hd in enumerate(self.hidden_dims):
-                x = self.nonlin(U.dense(x, hd, 'l{}'.format(ilayer), U.normc_initializer(1.0)))
-        else:
-            raise NotImplementedError(self.connection_type)
+    def get_initial_features(self):
+        return self.state_init
 
-        # Map to action
-        adim = self.ac_space.n
-        a = U.dense(x, adim, 'out', U.normc_initializer(0.01))
-        return a
+    #def _make_net(self, o):
 
-    def act(self, ob, random_stream=None):
-        a = self._act(ob)
+    def act(self, ob, c, h, random_stream=None):
+        sess = U.get_session()
+        #a = self._act(ob)
+        a = sess.run([self.sample] + self.state_out,
+                     {self.x: [ob], self.state_in[0]: c, self.state_in[1]: h})
         if random_stream is not None and self.ac_noise_std != 0:
             a += random_stream.randn(*a.shape) * self.ac_noise_std
         return a   # softmax vector

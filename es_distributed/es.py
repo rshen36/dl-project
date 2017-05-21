@@ -163,7 +163,7 @@ def run_master(master_redis_cfg, log_dir, exp):
 
     while True:
         step_tstart = time.time()
-        theta = policy.get_trainable_flat()   # theta = policy parameters?
+        theta = policy.get_trainable_flat()   # theta = policy parameters
         assert theta.dtype == np.float32
 
         curr_task_id = master.declare_task(Task(   # what exactly is a task in this context?
