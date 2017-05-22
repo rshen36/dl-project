@@ -1,3 +1,4 @@
+# modified from a3c.py from OpenAI's universe-starter-agent project
 from collections import namedtuple
 import numpy as np
 import tensorflow as tf

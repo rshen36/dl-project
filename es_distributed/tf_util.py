@@ -159,6 +159,7 @@ def conv2d(x, num_filters, name, filter_size=(3, 3), stride=(1, 1), pad="SAME", 
 # Basic Stuff
 # ================================================================
 
+
 def function(inputs, outputs, updates=None, givens=None):
     if isinstance(outputs, list):
         return _Function(inputs, outputs, updates, givens=givens)
@@ -170,7 +171,6 @@ def function(inputs, outputs, updates=None, givens=None):
         return lambda *inputs : f(*inputs)[0]
 
 
-# how tf does this work...
 class _Function(object):
     def __init__(self, inputs, outputs, updates, givens, check_nan=False):
         assert all(len(i.op.inputs) == 0 for i in inputs), "inputs should all be placeholders"

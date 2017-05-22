@@ -27,6 +27,7 @@
         32,
         32
       ],
+      "lstm_size": 256,
       "nonlin_type": "elu"
     },
     "type": "AtariPolicy"

@@ -124,17 +124,16 @@ class Policy:
 class GoPolicy(Policy):
     # ob_space = Box(3, 19, 19)
     # ac_space = Discrete(363)   19*19 + 2
-    def _initialize(self, ob_space, ac_space, ac_noise_std, nonlin_type, hidden_dims, connection_type):
+    def _initialize(self, ob_space, ac_space, ac_noise_std, nonlin_type, hidden_dims, lstm_size):
         self.ac_space = ac_space
         self.ac_noise_std = ac_noise_std
         self.hidden_dims = hidden_dims
-        self.connection_type = connection_type
+        self.lstm_size = lstm_size
 
-        # what is [nonlin_type] doing here?
         self.nonlin = {'tanh': tf.tanh, 'relu': tf.nn.relu, 'lrelu': U.lrelu, 'elu': tf.nn.elu}[nonlin_type]
 
         with tf.variable_scope(type(self).__name__) as scope:
-            # Observation normalization <-- is this necessary for Go?
+            # Observation normalization
             ob_mean = tf.get_variable(
                 'ob_mean', ob_space.shape, tf.float32, tf.constant_initializer(np.nan), trainable=False)
             ob_std = tf.get_variable(
@@ -147,25 +146,47 @@ class GoPolicy(Policy):
             ])
 
             # Policy network
-            o = tf.placeholder(tf.float32, list(ob_space.shape))   # o = input placeholder variable?
-            a = self._make_net(tf.clip_by_value((o - ob_mean) / ob_std, -5.0, 5.0))
-            self._act = U.function([o], a)   # pass o to nn a?
+            # would below work for go?
+            self.x = x = tf.placeholder(tf.float32, [None] + list(ob_space.shape))
+            for ilayer, hd in enumerate(self.hidden_dims):
+                # have filter size = board size (19 x 19)?
+                # decrease dimensionality or nah?
+                x = self.nonlin(U.conv2d(x, hd, "l{}".format(ilayer), [3, 3], [1, 1]))
+            # introduce a "fake" batch dimension of 1 after flatten so that we can do LSTM over time dim
+            x = tf.expand_dims(U.flatten(x), [0])
+
+            lstm = rnn.BasicLSTMCell(self.lstm_size, state_is_tuple=True)
+            step_size = tf.shape(self.x)[:1]
+
+            c_init = np.zeros((1, lstm.state_size.c), np.float32)
+            h_init = np.zeros((1, lstm.state_size.h), np.float32)
+            self.state_init = [c_init, h_init]
+            c_in = tf.placeholder(tf.float32, [1, lstm.state_size.c])
+            h_in = tf.placeholder(tf.float32, [1, lstm.state_size.h])
+            self.state_in = [c_in, h_in]
+
+            state_in = rnn.LSTMStateTuple(c_in, h_in)
+            lstm_outputs, lstm_state = tf.nn.dynamic_rnn(
+                lstm, x, initial_state=state_in, sequence_length=step_size,
+                time_major=False)
+            lstm_c, lstm_h = lstm_state
+            x = tf.reshape(lstm_outputs, [-1, self.lstm_size])
+            self.logits = U.dense(x, self.ac_space.n, 'action', U.normc_initializer(0.01))
+            self.state_out = [lstm_c[:1, :], lstm_h[:1, :]]
+            self.sample = U.categorical_sample(self.logits, self.ac_space.n)[0, :]
+
         return scope
 
-    # just copy parameters from parameter server like a separate worker?
-    def _make_net(self, o):
-        # Process observation
-        if self.connection_type == 'ff':
-            x = o
-            for ilayer, hd in enumerate(self.hidden_dims):
-                x = self.nonlin(U.dense(x, hd, 'l{}'.format(ilayer), U.normc_initializer(1.0)))
-        else:
-            raise NotImplementedError(self.connection_type)
+    def get_initial_features(self):
+        return self.state_init
 
-        # Map to action
-        adim = self.ac_space.n
-        a = U.dense(x, adim, 'out', U.normc_initializer(0.01))
-        return a
+    def act(self, ob, c0, h0, random_stream=None):
+        sess = U.get_session()
+        a, c1, h1 = sess.run([self.sample] + self.state_out,
+                             {self.x: [ob], self.state_in[0]: c0, self.state_in[1]: h0})
+        if random_stream is not None and self.ac_noise_std != 0:
+            a += random_stream.randn(*a.shape) * self.ac_noise_std
+        return a, c1, h1  # softmax vector
 
     def rollout(self, env, render=False, save_obs=False, random_stream=None):
         """
@@ -176,29 +197,25 @@ class GoPolicy(Policy):
         t = 0
         if save_obs:
             obs = []
-        ob = env.reset()
+        last_ob = env.reset()
+        last_features = self.get_initial_features()
         while True:
-            ac = self.act(np.squeeze(ob[None]), random_stream=random_stream)[0]
-            ac = ac.argmax()  # want the argmax?
+            fetched = self.act(last_ob, *last_features, random_stream=random_stream)
+            ac, last_features = fetched[0], fetched[1:]
             if save_obs:
-                obs.append(ob)
-            ob, rew, done, _ = env.step(ac)
+                obs.append(last_ob)
+            last_ob, rew, done, _ = env.step(ac.argmax())  # always want the argmax?
             rews.append(rew)
             t += 1
             if render:
                 env.render()
-            if np.abs(rew) == 1:  # helps avoid weird zero return bug
+            # tensorboard summary?
+            if np.abs(rew) == 1:  # helps avoid weird reward 0 bug
                 break
         rews = np.array(rews, dtype=np.float32)
         if save_obs:
             return rews, t, np.array(obs)
         return rews, t
-
-    def act(self, ob, random_stream=None):
-        a = self._act(ob)
-        if random_stream is not None and self.ac_noise_std != 0:
-            a += random_stream.randn(*a.shape) * self.ac_noise_std
-        return a   # softmax vector
 
     @property
     def needs_ob_stat(self):   # necessary for GoEnv?
@@ -218,12 +235,12 @@ class GoPolicy(Policy):
 class AtariPolicy(Policy):
     # ob_space = Box(210, 160, 3)  # pixels most likely
     # ac_space = Discrete(6)
-    def _initialize(self, ob_space, ac_space, ac_noise_std, nonlin_type, hidden_dims):
+    def _initialize(self, ob_space, ac_space, ac_noise_std, nonlin_type, hidden_dims, lstm_size):
         self.ac_space = ac_space
         self.ac_noise_std = ac_noise_std
         self.hidden_dims = hidden_dims
+        self.lstm_size = lstm_size
 
-        # what is [nonlin_type] doing here?
         self.nonlin = {'tanh': tf.tanh, 'relu': tf.nn.relu, 'lrelu': U.lrelu, 'elu': tf.nn.elu}[nonlin_type]
 
         with tf.variable_scope(type(self).__name__) as scope:
@@ -248,11 +265,7 @@ class AtariPolicy(Policy):
             # introduce a "fake" batch dimension of 1 after flatten so that we can do LSTM over time dim
             x = tf.expand_dims(U.flatten(x), [0])
 
-            # a = self._make_net(tf.clip_by_value((o - ob_mean) / ob_std, -5.0, 5.0))
-            # self._act = U.function([o], a)   # pass o to nn a?
-
-            size = 256  # TODO: include this in Config
-            lstm = rnn.BasicLSTMCell(size, state_is_tuple=True)
+            lstm = rnn.BasicLSTMCell(self.lstm_size, state_is_tuple=True)
             step_size = tf.shape(self.x)[:1]
 
             c_init = np.zeros((1, lstm.state_size.c), np.float32)
@@ -267,12 +280,10 @@ class AtariPolicy(Policy):
                 lstm, x, initial_state=state_in, sequence_length=step_size,
                 time_major=False)
             lstm_c, lstm_h = lstm_state
-            x = tf.reshape(lstm_outputs, [-1, size])
+            x = tf.reshape(lstm_outputs, [-1, self.lstm_size])
             self.logits = U.dense(x, self.ac_space.n, 'action', U.normc_initializer(0.01))
-            #self.vf = tf.reshape(U.dense(x, 1, 'value', U.normc_initializer(1.0)), [-1])
             self.state_out = [lstm_c[:1, :], lstm_h[:1, :]]
             self.sample = U.categorical_sample(self.logits, self.ac_space.n)[0, :]
-            #self.var_list = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, tf.get_variable_scope().name)
 
         return scope
 
@@ -281,7 +292,6 @@ class AtariPolicy(Policy):
 
     def act(self, ob, c0, h0, random_stream=None):
         sess = U.get_session()
-        #a = self._act(ob)
         a, c1, h1 = sess.run([self.sample] + self.state_out,
                      {self.x: [ob], self.state_in[0]: c0, self.state_in[1]: h0})
         if random_stream is not None and self.ac_noise_std != 0:
@@ -300,7 +310,6 @@ class AtariPolicy(Policy):
         last_ob = env.reset()
         last_features = self.get_initial_features()
         while True:
-            #ac = self.act(np.squeeze(ob[None]), random_stream=random_stream)[0]
             fetched = self.act(last_ob, *last_features, random_stream=random_stream)
             ac, last_features = fetched[0], fetched[1:]
             if save_obs:
