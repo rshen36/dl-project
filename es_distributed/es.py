@@ -166,7 +166,7 @@ def run_master(master_redis_cfg, log_dir, exp):
         theta = policy.get_trainable_flat()   # theta = policy parameters
         assert theta.dtype == np.float32
 
-        curr_task_id = master.declare_task(Task(   # what exactly is a task in this context?
+        curr_task_id = master.declare_task(Task(
             params=theta,
             ob_mean=ob_stat.mean if policy.needs_ob_stat else None,
             ob_std=ob_stat.std if policy.needs_ob_stat else None

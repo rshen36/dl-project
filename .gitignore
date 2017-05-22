@@ -97,3 +97,4 @@ ENV/
 .*~
 
 logs/*
+a3c_gym/test/*

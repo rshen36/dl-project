@@ -29,9 +29,9 @@ def create_env(env_id, client_id, remotes, **kwargs):
 
 def create_gym_env(env_id):
     env = gym.make(env_id)
-    env = Vectorize(env)  # ???
-    env = DiagnosticsInfo(env)  # ???
-    env = Unvectorize(env)  # ???
+    env = Vectorize(env)
+    env = DiagnosticsInfo(env)
+    env = Unvectorize(env)
     return env
 
 def create_flash_env(env_id, client_id, remotes, **_):

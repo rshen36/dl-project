@@ -1,5 +1,5 @@
 # modified from worker.py from OpenAI's universe-starter-agent project
-import gym
+import go_vncdriver
 import tensorflow as tf
 import argparse
 import logging
@@ -8,6 +8,7 @@ import time
 import os
 from a3c import A3C
 
+from envs import create_atari_env
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -22,7 +23,8 @@ class FastSaver(tf.train.Saver):
 
 def run(args, server):
     #env = create_env(args.env_id, client_id=str(args.task), remotes=args.remotes)
-    env = gym.make(args.env_id)
+    #env = create_gym_env(args.env_id)
+    env = create_atari_env(args.env_id)
     trainer = A3C(env, args.task, args.visualise)
 
     # Variable names that start with "local" are not saved in checkpoints.
@@ -109,10 +111,10 @@ def main(_):
     parser.add_argument('--num-workers', default=1, type=int, help='Number of workers')
     parser.add_argument('--log-dir', default="/tmp/pong", help='Log directory path')
     parser.add_argument('--env-id', default="Pong-v0", help='Environment id')
-    parser.add_argument('-r', '--remotes', default=None,
-                        help='References to environments to create (e.g. -r 20), '
-                             'or the address of pre-existing VNC servers and '
-                             'rewarders to use (e.g. -r vnc://localhost:5900+15900,vnc://localhost:5901+15901)')
+    # parser.add_argument('-r', '--remotes', default=None,
+    #                     help='References to environments to create (e.g. -r 20), '
+    #                          'or the address of pre-existing VNC servers and '
+    #                          'rewarders to use (e.g. -r vnc://localhost:5900+15900,vnc://localhost:5901+15901)')
 
     # Add visualisation argument
     parser.add_argument('--visualise', action='store_true',
