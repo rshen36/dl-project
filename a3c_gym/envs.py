@@ -1,3 +1,4 @@
+# modified from envs.py from OpenAI's universe-starter-agent project
 import cv2
 from gym.spaces.box import Box
 import numpy as np
@@ -25,6 +26,13 @@ def create_env(env_id, client_id, remotes, **kwargs):
         # Assume atari.
         assert "." not in env_id  # universe environments have dots in names.
         return create_atari_env(env_id)
+
+def create_gym_env(env_id):
+    env = gym.make(env_id)
+    env = Vectorize(env)  # ???
+    env = DiagnosticsInfo(env)  # ???
+    env = Unvectorize(env)  # ???
+    return env
 
 def create_flash_env(env_id, client_id, remotes, **_):
     env = gym.make(env_id)
