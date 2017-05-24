@@ -8,7 +8,7 @@ import time
 import os
 from a3c import A3C
 
-from envs import create_atari_env
+from envs import create_gym_env
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -23,8 +23,8 @@ class FastSaver(tf.train.Saver):
 
 def run(args, server):
     #env = create_env(args.env_id, client_id=str(args.task), remotes=args.remotes)
-    #env = create_gym_env(args.env_id)
-    env = create_atari_env(args.env_id)
+    env = create_gym_env(args.env_id)
+    #env = create_atari_env(args.env_id)
     trainer = A3C(env, args.task, args.visualise)
 
     # Variable names that start with "local" are not saved in checkpoints.
