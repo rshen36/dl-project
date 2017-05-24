@@ -21,12 +21,14 @@
   "policy": {
     "args": {
       "ac_noise_std": 0.01,
-      "connection_type": "ff",
       "hidden_dims": [
-        512,
-        512
+        32,
+        32,
+        32,
+        32
       ],
-      "nonlin_type": "lrelu"
+      "lstm_size": 256,
+      "nonlin_type": "elu"
     },
     "type": "AtariPolicy"
   }
