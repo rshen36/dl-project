@@ -43,7 +43,6 @@ def master(exp_file, master_socket_path, log_dir):
     run_master({'unix_socket_path': master_socket_path}, log_dir, exp)
 
 
-# some fucky shit is going on here (with multithreading?)
 @cli.command()
 @click.option('--master_socket_path', required=True)
 @click.option('--relay_socket_path', required=True)

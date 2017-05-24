@@ -186,7 +186,7 @@ class GoPolicy(Policy):
                              {self.x: [ob], self.state_in[0]: c0, self.state_in[1]: h0})
         if random_stream is not None and self.ac_noise_std != 0:
             a += random_stream.randn(*a.shape) * self.ac_noise_std
-        return a, c1, h1  # softmax vector
+        return a, c1, h1
 
     def rollout(self, env, render=False, save_obs=False, random_stream=None):
         """
@@ -204,12 +204,13 @@ class GoPolicy(Policy):
             ac, last_features = fetched[0], fetched[1:]
             if save_obs:
                 obs.append(last_ob)
-            last_ob, rew, done, _ = env.step(ac.argmax())  # always want the argmax?
+            #ac = ac.argmax()
+            ac = np.random.choice(np.arange(len(ac)), p=ac)  # is it a softmax vector?
+            last_ob, rew, done, _ = env.step(ac.argmax())
             rews.append(rew)
             t += 1
             if render:
                 env.render()
-            # tensorboard summary?
             if np.abs(rew) == 1:  # helps avoid weird reward 0 bug
                 break
         rews = np.array(rews, dtype=np.float32)
