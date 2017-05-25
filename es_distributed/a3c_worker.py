@@ -16,8 +16,9 @@ import tensorflow as tf
 # from lib import plotting
 from lib.atari.state_processor import StateProcessor
 from lib.atari import helpers as atari_helpers
-from estimators import ValueEstimator, PolicyEstimator
+from .estimators import ValueEstimator, PolicyEstimator
 
+# make consistent with ES?
 Transition = collections.namedtuple("Transition", ["state", "action", "reward", "next_state", "done"])
 
 
@@ -35,6 +36,7 @@ def make_copy_params_op(v1_list, v2_list):
         update_ops.append(op)
 
     return update_ops
+
 
 def make_train_op(local_estimator, global_estimator):
     """
@@ -65,15 +67,15 @@ class Worker(object):
         max_global_steps: If set, stop coordinator when global_counter > max_global_steps
     """
     #def __init__(self, name, env, policy_net, value_net, global_counter, discount_factor=0.99, summary_writer=None, max_global_steps=None):
-    def __init__(self, name, env, policy_net, value_net, discount_factor=0.99):
+    def __init__(self, name, env, policy_net, value_net, global_counter, discount_factor=0.99, max_global_steps=None):
         self.name = name
         self.discount_factor = discount_factor
-        #self.max_global_steps = max_global_steps
-        #self.global_step = tf.contrib.framework.get_global_step()
+        self.max_global_steps = max_global_steps
+        self.global_step = tf.contrib.framework.get_global_step()  # should I use global steps?
         self.global_policy_net = policy_net
         self.global_value_net = value_net
-        #self.global_counter = global_counter
-        #self.local_counter = itertools.count()
+        self.global_counter = global_counter
+        self.local_counter = itertools.count()
         self.sp = StateProcessor()
         #self.summary_writer = summary_writer
         self.env = env
@@ -83,7 +85,8 @@ class Worker(object):
             self.policy_net = PolicyEstimator(policy_net.num_outputs)
             self.value_net = ValueEstimator(reuse=True)
 
-        # Op to copy params from global policy/valuenets
+        # Op to copy params from global policy/value nets
+        # may not work in combo with ES
         self.copy_params_op = make_copy_params_op(
           tf.contrib.slim.get_variables(scope="global", collection=tf.GraphKeys.TRAINABLE_VARIABLES),
           tf.contrib.slim.get_variables(scope=self.name, collection=tf.GraphKeys.TRAINABLE_VARIABLES))
@@ -98,15 +101,16 @@ class Worker(object):
             # Initial state
             self.state = atari_helpers.atari_make_initial_state(self.sp.process(self.env.reset()))
             try:
-                while not coord.should_stop():
-                    # Copy Parameters from the global networks
-                    sess.run(self.copy_params_op)
+                while not coord.should_stop():  # shouldn't use this if using Redis architecture?
+                    # Copy parameters from the global networks
+                    sess.run(self.copy_params_op)  # TODO: test this
 
                     # Collect some experience
                     transitions, local_t, global_t = self.run_n_steps(t_max, sess)
 
                     if self.max_global_steps is not None and global_t >= self.max_global_steps:
-                        tf.logging.info("Reached global step {}. Stopping.".format(global_t))
+                        # tf.logging.info("Reached global step {}. Stopping.".format(global_t))
+                        # TODO: use tlogger
                         coord.request_stop()
                         return
 
@@ -117,12 +121,12 @@ class Worker(object):
                 return
 
     def _policy_net_predict(self, state, sess):
-        feed_dict = { self.policy_net.states: [state] }
+        feed_dict = {self.policy_net.states: [state]}
         preds = sess.run(self.policy_net.predictions, feed_dict)
         return preds["probs"][0]
 
     def _value_net_predict(self, state, sess):
-        feed_dict = { self.value_net.states: [state] }
+        feed_dict = {self.value_net.states: [state]}
         preds = sess.run(self.value_net.predictions, feed_dict)
         return preds["logits"][0]
 
@@ -139,12 +143,13 @@ class Worker(object):
             transitions.append(Transition(
               state=self.state, action=action, reward=reward, next_state=next_state, done=done))
 
-            # Increase local and global counters
+            # Increase local and global counters  <-- necessary?
             local_t = next(self.local_counter)
             global_t = next(self.global_counter)
 
-            if local_t % 100 == 0:
-                tf.logging.info("{}: local Step {}, global step {}".format(self.name, local_t, global_t))
+            # TODO: use tlogger
+            # if local_t % 100 == 0:
+            #     tf.logging.info("{}: local Step {}, global step {}".format(self.name, local_t, global_t))
 
             if done:
                 self.state = atari_helpers.atari_make_initial_state(self.sp.process(self.env.reset()))
@@ -162,7 +167,7 @@ class Worker(object):
             sess: A Tensorflow session
         """
 
-        # If we episode was not done we bootstrap the value from the last state
+        # If the episode was not done we bootstrap the value from the last state
         reward = 0.0
         if not transitions[-1].done:
             reward = self._value_net_predict(transitions[-1].next_state, sess)
@@ -191,20 +196,30 @@ class Worker(object):
         }
 
         # Train the global estimators using local gradients
-        global_step, pnet_loss, vnet_loss, _, _, pnet_summaries, vnet_summaries = sess.run([
+        # global_step, pnet_loss, vnet_loss, _, _, pnet_summaries, vnet_summaries = sess.run([
+        #     self.global_step,
+        #     self.policy_net.loss,
+        #     self.value_net.loss,
+        #     self.pnet_train_op,
+        #     self.vnet_train_op,
+        #     self.policy_net.summaries,
+        #     self.value_net.summaries
+        # ], feed_dict)
+
+        global_step, pnet_loss, vnet_loss, _, _ = sess.run([
             self.global_step,
             self.policy_net.loss,
             self.value_net.loss,
             self.pnet_train_op,
-            self.vnet_train_op,
-            self.policy_net.summaries,
-            self.value_net.summaries
+            self.vnet_train_op
         ], feed_dict)
 
         # Write summaries
-        if self.summary_writer is not None:
-            self.summary_writer.add_summary(pnet_summaries, global_step)
-            self.summary_writer.add_summary(vnet_summaries, global_step)
-            self.summary_writer.flush()
+        # TODO: use tlogger
+        # if self.summary_writer is not None:
+        #     self.summary_writer.add_summary(pnet_summaries, global_step)
+        #     self.summary_writer.add_summary(vnet_summaries, global_step)
+        #     self.summary_writer.flush()
 
-        return pnet_loss, vnet_loss, pnet_summaries, vnet_summaries
+        #return pnet_loss, vnet_loss, pnet_summaries, vnet_summaries
+        return pnet_loss, vnet_loss

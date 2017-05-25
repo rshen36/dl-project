@@ -9,8 +9,10 @@ import gym
 import tensorflow as tf
 import numpy as np
 
-from .dist import MasterClient, WorkerClient
 from lib.atari import helpers as atari_helpers  # for preprocessing Atari environments
+from .dist import MasterClient, WorkerClient
+from .estimators import PolicyEstimator, ValueEstimator
+from .a3c_worker import Worker
 
 logging.basicConfig(filename='experiment.log', level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -132,7 +134,6 @@ def make_env(env_id, wrap=True):
     env = env.env
     if wrap:
         env = atari_helpers.AtariEnvWrapper(env)
-    # from Britz: limit action space for Pong and Breakout?
 
     return env
 
@@ -175,24 +176,32 @@ def run_master(master_redis_cfg, log_dir, exp):
     #     logger.info('Initializing weights from {}'.format(exp['policy']['init_from']))
     #     policy.initialize_from(exp['policy']['init_from'], ob_stat)
 
-    global_step = tf.Variable(0, name="global_step", trainable=False)  # keep track of num updates
-    episodes_so_far = 0
+    global_step = tf.Variable(0, name="global_step", trainable=False)  # A3C
+    episodes_so_far = 0  # why not tf variable?
     # episodes_so_far = tf.Variable(0, name="episodes_so_far", trainable=False)
-    timesteps_so_far = 0
+    timesteps_so_far = 0  # why not tf variable?
     # timesteps_so_far = tf.Variable(0, name="timesteps_so_far", trainable=False)
     tstart = time.time()
     master.declare_experiment(exp)
 
     # A3C: global policy and value nets
     # TODO: update below for current communication structure
-    # with tf._variable_scope("global") as vs:
-    #     policy_net = PolicyEstimator(num_outputs=len(VALID_ACTIONS))
-    #     value_net = ValueEstimator(reuse=True)
+    with tf.variable_scope("global") as vs:
+        if exp['env_id'] == "Pong-v0" or exp['env_id'] == "Breakout-v0":  # recommendation from Denny Britz
+            n_outputs = 4
+        else:
+            n_outputs = env.action_space.n
+
+        # TODO: communicate Config optimizer parameter to these classes (anything else as well?)
+        a3c_policy_net = PolicyEstimator(num_outputs=n_outputs)
+        a3c_value_net = ValueEstimator(reuse=True)
 
     # global step iterator
-    global_counter = itertools.count()  # may need to move/update this (is it necessary at all?)
+    # necessary for doing partial rollouts in a3c_worker
+    global_counter = itertools.count()  # may need to move/update this
 
     # TODO: figure out how to efficiently communicate policy_net, value_net, and global_counter to workers
+    # TODO: incorporate t_max, max_global_steps (?), and eval_every (?) parameters
 
     while True:
         step_tstart = time.time()
