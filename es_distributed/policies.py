@@ -233,11 +233,16 @@ class GoPolicy(Policy):
 
 
 # so far, only tested on Pong and Breakout (for which the ob_space and ac_space are the same structure)
+# from Britz: limit action space for Pong and Breakout?
 class AtariPolicy(Policy):
     # ob_space = Box(210, 160, 3)  # pixels most likely
     # ac_space = Discrete(6)
-    def _initialize(self, ob_space, ac_space, ac_noise_std, nonlin_type, hidden_dims, lstm_size):
-        self.ac_space = ac_space
+    def _initialize(self, ob_space, ac_space, limit, ac_noise_std, nonlin_type, hidden_dims, lstm_size):
+        # self.ac_space = ac_space
+        if limit:  # recommendation from Denny Britz
+            self.ac_space = list(range(4))
+        else:
+            self.ac_space = list(range(ac_space.n))
         self.ac_noise_std = ac_noise_std
         self.hidden_dims = hidden_dims
         self.lstm_size = lstm_size
@@ -258,8 +263,6 @@ class AtariPolicy(Policy):
             ])
 
             # Policy network
-            # below should work as long as input is pixels?
-            # more pre-processing necessary?
             self.x = x = tf.placeholder(tf.float32, [None] + list(ob_space.shape))
             for ilayer, hd in enumerate(self.hidden_dims):
                 x = self.nonlin(U.conv2d(x, hd, "l{}".format(ilayer), [3, 3], [2, 2]))
@@ -282,9 +285,9 @@ class AtariPolicy(Policy):
                 time_major=False)
             lstm_c, lstm_h = lstm_state
             x = tf.reshape(lstm_outputs, [-1, self.lstm_size])
-            self.logits = U.dense(x, self.ac_space.n, 'action', U.normc_initializer(0.01))
+            self.logits = U.dense(x, len(self.ac_space), 'action', U.normc_initializer(0.01))
             self.state_out = [lstm_c[:1, :], lstm_h[:1, :]]
-            self.sample = U.categorical_sample(self.logits, self.ac_space.n)[0, :]
+            self.sample = U.categorical_sample(self.logits, len(self.ac_space))[0, :]
 
         return scope
 
@@ -294,7 +297,7 @@ class AtariPolicy(Policy):
     def act(self, ob, c0, h0, random_stream=None):
         sess = U.get_session()
         a, c1, h1 = sess.run([self.sample] + self.state_out,
-                     {self.x: [ob], self.state_in[0]: c0, self.state_in[1]: h0})
+                             {self.x: [ob], self.state_in[0]: c0, self.state_in[1]: h0})
         if random_stream is not None and self.ac_noise_std != 0:
             a += random_stream.randn(*a.shape) * self.ac_noise_std
         return a, c1, h1   # softmax vector
@@ -315,12 +318,13 @@ class AtariPolicy(Policy):
             ac, last_features = fetched[0], fetched[1:]
             if save_obs:
                 obs.append(last_ob)
-            last_ob, rew, done, _ = env.step(ac.argmax())  # always want the argmax?
+            # ac = ac.argmax()  # always want the argmax?
+            ac = np.random.choice(np.arange(len(ac)), p=ac)  # is it def a softmax vector?
+            last_ob, rew, done, _ = env.step(ac)
             rews.append(rew)
             t += 1
             if render:
                 env.render()
-            # tensorboard summary?
             if done:
                 break
         rews = np.array(rews, dtype=np.float32)

@@ -40,7 +40,7 @@ def create_commands(session, num_workers, env_id, logdir, shell='bash', mode='tm
     # for launching the TF workers and for launching tensorboard
     base_cmd = [
         'CUDA_VISIBLE_DEVICES=',
-        sys.executable, 'worker.py',
+        sys.executable, 'a3c_worker.py',
         '--log-dir', logdir,
         '--env-id', env_id,
         '--num-workers', str(num_workers)]

@@ -1,12 +1,16 @@
 # Modified from es.py from OpenAI's evolutionary-strategies-starter project
+# Also borrows concepts from Denny Britz's reinforcement-learning project
 import logging
+import itertools
 import time
 from collections import namedtuple
 
+import gym
+import tensorflow as tf
 import numpy as np
 
 from .dist import MasterClient, WorkerClient
-
+from lib.atari import helpers as atari_helpers  # for preprocessing Atari environments
 
 logging.basicConfig(filename='experiment.log', level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -17,6 +21,7 @@ Config = namedtuple('Config', [
     'return_proc_mode', 'episode_cutoff_mode'
 ])
 Task = namedtuple('Task', ['params', 'ob_mean', 'ob_std'])
+# TaskA3C = namedtuple()
 Result = namedtuple('Result', [
     'worker_id',
     'noise_inds_n', 'returns_n2', 'signreturns_n2', 'lengths_n2',
@@ -121,17 +126,30 @@ def batched_weighted_sum(weights, vecs, batch_size):
     return total, num_items_summed
 
 
+def make_env(env_id, wrap=True):
+    env = gym.envs.make(env_id)
+    # remove the timelimitwrapper
+    env = env.env
+    if wrap:
+        env = atari_helpers.AtariEnvWrapper(env)
+    # from Britz: limit action space for Pong and Breakout?
+
+    return env
+
+
 def setup(exp, single_threaded):
-    import gym
     gym.undo_logger_setup()   # to allow for own logging
     from es_distributed import tf_util
     from es_distributed import policies
+    limit = False
 
     config = Config(**exp['config'])
-    env = gym.make(exp['env_id'])
+    env = make_env(exp['env_id'])
+    if exp['env_id'] == "Pong-v0" or exp['env_id'] == "Breakout-v0":  # recommendation from Denny Britz
+        limit = True
     sess = make_session(single_threaded=single_threaded)
     policy = getattr(policies, exp['policy']['type'])(env.observation_space,
-                                                      env.action_space, **exp['policy']['args'])
+                                                      env.action_space, limit, **exp['policy']['args'])
     tf_util.initialize()
 
     return config, env, sess, policy
@@ -157,14 +175,28 @@ def run_master(master_redis_cfg, log_dir, exp):
     #     logger.info('Initializing weights from {}'.format(exp['policy']['init_from']))
     #     policy.initialize_from(exp['policy']['init_from'], ob_stat)
 
+    global_step = tf.Variable(0, name="global_step", trainable=False)  # keep track of num updates
     episodes_so_far = 0
+    # episodes_so_far = tf.Variable(0, name="episodes_so_far", trainable=False)
     timesteps_so_far = 0
+    # timesteps_so_far = tf.Variable(0, name="timesteps_so_far", trainable=False)
     tstart = time.time()
     master.declare_experiment(exp)
 
+    # A3C: global policy and value nets
+    # TODO: update below for current communication structure
+    # with tf._variable_scope("global") as vs:
+    #     policy_net = PolicyEstimator(num_outputs=len(VALID_ACTIONS))
+    #     value_net = ValueEstimator(reuse=True)
+
+    # global step iterator
+    global_counter = itertools.count()  # may need to move/update this (is it necessary at all?)
+
+    # TODO: figure out how to efficiently communicate policy_net, value_net, and global_counter to workers
+
     while True:
         step_tstart = time.time()
-        theta = policy.get_trainable_flat()   # theta = policy parameters
+        theta = policy.get_trainable_flat()
         assert theta.dtype == np.float32
 
         curr_task_id = master.declare_task(Task(
@@ -193,7 +225,6 @@ def run_master(master_redis_cfg, log_dir, exp):
                     eval_rets.append(result.eval_return)
                     eval_lens.append(result.eval_length)
             else:
-                # The real shit
                 assert (result.noise_inds_n.ndim == 1 and
                         result.returns_n2.shape == result.lengths_n2.shape == (len(result.noise_inds_n), 2))
                 assert result.returns_n2.dtype == np.float32
@@ -225,7 +256,7 @@ def run_master(master_redis_cfg, log_dir, exp):
         returns_n2 = np.concatenate([r.returns_n2 for r in curr_task_results])
         lengths_n2 = np.concatenate([r.lengths_n2 for r in curr_task_results])
         assert noise_inds_n.shape[0] == returns_n2.shape[0] == lengths_n2.shape[0]
-        # Process returns
+        # Process returns (ES)
         if config.return_proc_mode == 'centered_rank':
             proc_returns_n2 = compute_centered_ranks(returns_n2)
         elif config.return_proc_mode == 'sign':
@@ -234,7 +265,7 @@ def run_master(master_redis_cfg, log_dir, exp):
             proc_returns_n2 = compute_centered_ranks(np.concatenate([r.signreturns_n2 for r in curr_task_results]))
         else:
             raise NotImplementedError(config.return_proc_mode)
-        # Compute and take step
+        # Compute and take step (ES)
         g, count = batched_weighted_sum(
             proc_returns_n2[:, 0] - proc_returns_n2[:, 1],
             (noise.get(idx, policy.num_params) for idx in noise_inds_n),
@@ -309,6 +340,11 @@ def run_worker(relay_redis_cfg, noise, min_task_runtime=1.):  # what should min_
     worker_id = rs.randint(2 ** 31)   # don't have to order worker_ids and guarantee no two same id?
 
     assert policy.needs_ob_stat == (config.calc_obstat_prob != 0)
+
+    # TODO: write summaries from workers?
+    # worker_summary_writer = None
+    # if worker_id == 0:  # will need to figure out a way around this
+    #     worker_summary_writer = summary_writer
 
     while True:
         task_id, task_data = worker.get_current_task()
