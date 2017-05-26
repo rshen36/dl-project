@@ -8,7 +8,6 @@ except ImportError:
     import pickle
 
 import h5py   # TODO: study HDF5 / h5py
-import scipy.signal
 import numpy as np
 import tensorflow as tf
 import tensorflow.contrib.rnn as rnn
@@ -233,34 +232,6 @@ class GoPolicy(Policy):
     #def initialize_from(self, filename, ob_stat=None):
 
 
-# A3C helper functions
-def discount(x, gamma):
-    return scipy.signal.lfilter([1], [1, -gamma], x[::-1], axis=0)[::-1]  # ???
-
-
-def process_rollout(rollout, gamma, lambda_=1.0):
-    """
-    given a rollout, compute its returns and the advantage
-    """
-    batch_si = np.asarray(rollout.states)
-    batch_a = np.asarray(rollout.actions)
-    rewards = np.asarray(rollout.rewards)
-    vpred_t = np.asarray(rollout.values + [rollout.r])
-
-    rewards_plus_v = np.asarray(rollout.rewards + [rollout.r])
-    batch_r = discount(rewards_plus_v, gamma)[:-1]  # ???
-    delta_t = rewards + gamma * vpred_t[1:] - vpred_t[:-1]  # ???
-    # this formula for the advantage comes from "Generalized Advantage Estimation":
-    # https://arxiv.org/abs/1506.02438
-    batch_adv = discount(delta_t, gamma * lambda_)
-
-    features = rollout.features[0]  # ???
-    return Batch(batch_si, batch_a, batch_adv, batch_r, rollout.terminal, features)
-
-
-Batch = namedtuple("Batch", ["si", "a", "adv", "r", "terminal", "features"])
-
-
 # TODO: make consistent with es code
 class PartialRollout(object):
     """
@@ -300,12 +271,8 @@ class PartialRollout(object):
 class AtariPolicy(Policy):
     # ob_space = Box(210, 160, 3)  # pixels most likely
     # ac_space = Discrete(6)
-    def _initialize(self, ob_space, ac_space, limit, ac_noise_std, nonlin_type, hidden_dims, lstm_size):
-        # self.ac_space = ac_space
-        if limit:  # recommendation from Denny Britz
-            self.ac_space = list(range(4))
-        else:
-            self.ac_space = list(range(ac_space.n))
+    def _initialize(self, ob_space, ac_space, ac_noise_std, nonlin_type, hidden_dims, lstm_size):
+        self.ac_space = ac_space
         self.ac_noise_std = ac_noise_std
         self.hidden_dims = hidden_dims
         self.lstm_size = lstm_size
@@ -353,9 +320,7 @@ class AtariPolicy(Policy):
             self.ac_probs = tf.nn.softmax(self.logits)
             self.vf = tf.reshape(U.dense(x, 1, 'value', U.normc_initializer(1.0)), [-1])  # only for A3C
             self.state_out = [lstm_c[:1, :], lstm_h[:1, :]]
-            # self.sample = U.categorical_sample(self.logits, len(self.ac_space))[0, :]
-            # self.var_list = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, tf.get_variable_scope().name)
-            # self.var_list = self.trainable_variables
+            # self.sample = U.categorical_sample(self.logits, self.ac_space.n)[0, :]
 
         return scope
 
@@ -366,8 +331,8 @@ class AtariPolicy(Policy):
         sess = U.get_session()
         a, c1, h1 = sess.run([self.ac_probs, self.vf] + self.state_out,
                              {self.x: [ob], self.state_in[0]: c0, self.state_in[1]: h0})
-        if random_stream is not None and self.ac_noise_std != 0:
-            a += random_stream.randn(*a.shape) * self.ac_noise_std
+        # if random_stream is not None and self.ac_noise_std != 0:  # only use if using one-hot and argmax
+        #     a += random_stream.randn(*a.shape) * self.ac_noise_std
         return a, c1, h1   # softmax vector?
 
     def value(self, ob, c, h):
@@ -388,10 +353,11 @@ class AtariPolicy(Policy):
         while True:
             fetched = self.act(last_ob, *last_features, random_stream=random_stream)
             ac, last_features = fetched[0], fetched[2:]
+            ac = ac.squeeze()
             if save_obs:
                 obs.append(last_ob)
-            # ac = ac.argmax()  # always want the argmax?
-            ac = np.random.choice(np.arange(len(ac)), p=ac)  # softmax vector?
+            # ac = ac.argmax()  # want argmax when using one-hot and random_stream
+            ac = np.random.choice(np.arange(len(ac)), p=ac)  # when using action probs
             last_ob, rew, done, _ = env.step(ac)
             rews.append(rew)
             t += 1
@@ -419,9 +385,10 @@ class AtariPolicy(Policy):
             for _ in range(num_local_steps):
                 fetched = self.act(last_state, *last_features, random_stream=random_stream)
                 action, value_, features = fetched[0], fetched[1], fetched[2:]
-                # ac = ac.argmax()  # always want the argmax?
-                ac = np.random.choice(np.arange(len(ac)), p=ac)  # softmax vector?
-                state, reward, terminal, info = env.step(ac)
+                action = action.squeeze()
+                # action = action.argmax()  # only want the argmax when using one-hot and random_stream
+                action = np.random.choice(np.arange(len(action)), p=action)  # when using action probs
+                state, reward, terminal, info = env.step(action)
                 if render:
                     env.render()
 

@@ -5,11 +5,11 @@ import itertools
 import time
 from collections import namedtuple
 
+import scipy.signal
 import tensorflow as tf
 import numpy as np
 
 from .dist import MasterClient, WorkerClient
-from .policies import process_rollout
 
 logging.basicConfig(filename='experiment.log', level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -17,16 +17,25 @@ logger = logging.getLogger(__name__)
 Config = namedtuple('Config', [
     'l2coeff', 'noise_stdev', 'episodes_per_batch', 'timesteps_per_batch',
     'calc_obstat_prob', 'eval_prob', 'snapshot_freq',
-    'return_proc_mode', 'episode_cutoff_mode'
+    'return_proc_mode', 'episode_cutoff_mode',
+    'es_a3c_prob', 'switch_freq'
 ])
-Task = namedtuple('Task', ['params', 'ob_mean', 'ob_std'])
-Result = namedtuple('Result', [  # need to make distinct results for es and a3c?
+Task = namedtuple('Task', ['params', 'ob_mean', 'ob_std', 'a3c'])
+Result = namedtuple('Result', [
     'worker_id',
     'noise_inds_n', 'returns_n2', 'signreturns_n2', 'lengths_n2',
     'eval_return', 'eval_length',
     'ob_sum', 'ob_sumsq', 'ob_count'
 ])
+Batch = namedtuple('Batch', [
+    # eval?
+    # 'worker_id',
+    # 'ob_sum', 'ob_sumsq', 'ob_count'
+    'si', 'a', 'adv', 'r', 'terminal', 'features'  # really have to communicate all of this?
+])
 # make separate es and a3c helper function files?
+# TODO: check a3c implementation against exact algorithm
+# need to implement global counter and t_max for a3c?
 
 
 class RunningStat(object):
@@ -76,6 +85,7 @@ class SharedNoiseTable(object):   # sharing same noise among all workers
         return stream.randint(0, len(self.noise) - dim + 1)
 
 
+# es helper functions
 def compute_ranks(x):
     """
     Returns ranks in [0, len(x))
@@ -116,6 +126,31 @@ def batched_weighted_sum(weights, vecs, batch_size):
     return total, num_items_summed
 
 
+# A3C helper functions
+def discount(x, gamma):
+    return scipy.signal.lfilter([1], [1, -gamma], x[::-1], axis=0)[::-1]  # ???
+
+
+def process_rollout(rollout, gamma, lambda_=1.0):
+    """
+    given a rollout, compute its returns and the advantage
+    """
+    batch_si = np.asarray(rollout.states)
+    batch_a = np.asarray(rollout.actions)
+    rewards = np.asarray(rollout.rewards)
+    vpred_t = np.asarray(rollout.values + [rollout.r])
+
+    rewards_plus_v = np.asarray(rollout.rewards + [rollout.r])
+    batch_r = discount(rewards_plus_v, gamma)[:-1]  # ???
+    delta_t = rewards + gamma * vpred_t[1:] - vpred_t[:-1]  # ???
+    # this formula for the advantage comes from "Generalized Advantage Estimation":
+    # https://arxiv.org/abs/1506.02438
+    batch_adv = discount(delta_t, gamma * lambda_)
+
+    features = rollout.features[0]  # ???
+    return Batch(batch_si, batch_a, batch_adv, batch_r, rollout.terminal, features)
+
+
 def make_session(single_threaded):
     if not single_threaded:
         return tf.InteractiveSession()
@@ -128,15 +163,15 @@ def setup(exp, single_threaded):
     gym.undo_logger_setup()   # to allow for own logging
     from es_distributed import tf_util
     from es_distributed import policies
-    limit = False
+    #limit = False  # TODO: limit action spaces for Pong and Breakout?
 
     config = Config(**exp['config'])
     env = gym.make(exp['env_id'])
-    if exp['env_id'] == "Pong-v0" or exp['env_id'] == "Breakout-v0":  # recommendation from Denny Britz
-        limit = True
+    # if exp['env_id'] == "Pong-v0" or exp['env_id'] == "Breakout-v0":  # recommendation from Denny Britz
+    #     limit = True
     sess = make_session(single_threaded=single_threaded)
     policy = getattr(policies, exp['policy']['type'])(env.observation_space,
-                                                      env.action_space, limit, **exp['policy']['args'])
+                                                      env.action_space, **exp['policy']['args'])
     tf_util.initialize()
 
     return config, env, sess, policy
@@ -166,6 +201,12 @@ def run_master(master_redis_cfg, log_dir, exp):
     timesteps_so_far = 0
     tstart = time.time()
     master.declare_experiment(exp)
+    a3c = rs.rand() < config.es_a3c_prob
+
+    # want in or out of the while-loop?
+    ac = tf.placeholder(tf.float32, [None, env.action_space.n], name='ac')
+    adv = tf.placeholder(tf.float32, [None], name='adv')
+    r = tf.placeholder(tf.float32, [None], name='r')
 
     while True:
         step_tstart = time.time()
@@ -175,113 +216,158 @@ def run_master(master_redis_cfg, log_dir, exp):
         curr_task_id = master.declare_task(Task(
             params=theta,
             ob_mean=ob_stat.mean if policy.needs_ob_stat else None,
-            ob_std=ob_stat.std if policy.needs_ob_stat else None
+            ob_std=ob_stat.std if policy.needs_ob_stat else None,
+            a3c=a3c
         ))
         tlogger.log('********** Iteration {} **********'.format(curr_task_id))
 
-        # Pop off results for the current task
-        curr_task_results, eval_rets, eval_lens, worker_ids = [], [], [], []
-        num_results_skipped, num_episodes_popped, num_timesteps_popped, ob_count_this_batch = 0, 0, 0, 0
-        while num_episodes_popped < config.episodes_per_batch or num_timesteps_popped < config.timesteps_per_batch:
-            # Wait for a result
-            task_id, result = master.pop_result()
-            assert isinstance(task_id, int) and isinstance(result, Result)
-            assert (result.eval_return is None) == (result.eval_length is None)
-            worker_ids.append(result.worker_id)
+        if not a3c:  # ES master step
+            # Pop off results for the current task
+            curr_task_results, eval_rets, eval_lens, worker_ids = [], [], [], []
+            num_results_skipped, num_episodes_popped, num_timesteps_popped, ob_count_this_batch = 0, 0, 0, 0
+            while num_episodes_popped < config.episodes_per_batch or num_timesteps_popped < config.timesteps_per_batch:
+                # Wait for a result
+                task_id, result = master.pop_result()
+                assert isinstance(task_id, int) and isinstance(result, Result)
+                assert (result.eval_return is None) == (result.eval_length is None)
+                worker_ids.append(result.worker_id)
 
-            if result.eval_length is not None:
-                # This was an eval job
-                episodes_so_far += 1
-                timesteps_so_far += result.eval_length
-                # Store the result only for the current task
-                if task_id == curr_task_id:
-                    eval_rets.append(result.eval_return)
-                    eval_lens.append(result.eval_length)
-            else:
-                assert (result.noise_inds_n.ndim == 1 and
-                        result.returns_n2.shape == result.lengths_n2.shape == (len(result.noise_inds_n), 2))
-                assert result.returns_n2.dtype == np.float32
-                # Update counts
-                result_num_eps = result.lengths_n2.size
-                result_num_timesteps = result.lengths_n2.sum()
-                episodes_so_far += result_num_eps
-                timesteps_so_far += result_num_timesteps
-                # Store results only for current tasks
-                if task_id == curr_task_id:
-                    curr_task_results.append(result)
-                    num_episodes_popped += result_num_eps
-                    num_timesteps_popped += result_num_timesteps
-                    # Update ob stats
-                    if policy.needs_ob_stat and result.ob_count > 0:
-                        ob_stat.increment(result.ob_sum, result.ob_sumsq, result.ob_count)
-                        ob_count_this_batch += result.ob_count
+                if result.eval_length is not None:
+                    # This was an eval job
+                    episodes_so_far += 1
+                    timesteps_so_far += result.eval_length
+                    # Store the result only for the current task
+                    if task_id == curr_task_id:
+                        eval_rets.append(result.eval_return)
+                        eval_lens.append(result.eval_length)
                 else:
-                    num_results_skipped += 1
+                    assert (result.noise_inds_n.ndim == 1 and
+                            result.returns_n2.shape == result.lengths_n2.shape == (len(result.noise_inds_n), 2))
+                    assert result.returns_n2.dtype == np.float32
+                    # Update counts
+                    result_num_eps = result.lengths_n2.size
+                    result_num_timesteps = result.lengths_n2.sum()
+                    episodes_so_far += result_num_eps
+                    timesteps_so_far += result_num_timesteps
+                    # Store results only for current tasks
+                    if task_id == curr_task_id:
+                        curr_task_results.append(result)
+                        num_episodes_popped += result_num_eps
+                        num_timesteps_popped += result_num_timesteps
+                        # Update ob stats
+                        if policy.needs_ob_stat and result.ob_count > 0:
+                            ob_stat.increment(result.ob_sum, result.ob_sumsq, result.ob_count)
+                            ob_count_this_batch += result.ob_count
+                    else:
+                        num_results_skipped += 1
 
-        # Compute skip fraction
-        frac_results_skipped = num_results_skipped / (num_results_skipped + len(curr_task_results))
-        if num_results_skipped > 0:
-            logger.warning('Skipped {} out of date results ({:.2f}%)'.format(
-                num_results_skipped, 100. * frac_results_skipped))
+            # Compute skip fraction
+            frac_results_skipped = num_results_skipped / (num_results_skipped + len(curr_task_results))
+            if num_results_skipped > 0:
+                logger.warning('Skipped {} out of date results ({:.2f}%)'.format(
+                    num_results_skipped, 100. * frac_results_skipped))
 
-        # Assemble results
-        noise_inds_n = np.concatenate([r.noise_inds_n for r in curr_task_results])
-        returns_n2 = np.concatenate([r.returns_n2 for r in curr_task_results])
-        lengths_n2 = np.concatenate([r.lengths_n2 for r in curr_task_results])
-        assert noise_inds_n.shape[0] == returns_n2.shape[0] == lengths_n2.shape[0]
-        # Process returns (ES)
-        if config.return_proc_mode == 'centered_rank':
-            proc_returns_n2 = compute_centered_ranks(returns_n2)
-        elif config.return_proc_mode == 'sign':
-            proc_returns_n2 = np.concatenate([r.signreturns_n2 for r in curr_task_results])
-        elif config.return_proc_mode == 'centered_sign_rank':
-            proc_returns_n2 = compute_centered_ranks(np.concatenate([r.signreturns_n2 for r in curr_task_results]))
-        else:
-            raise NotImplementedError(config.return_proc_mode)
-        # Compute and take step (ES)
-        g, count = batched_weighted_sum(
-            proc_returns_n2[:, 0] - proc_returns_n2[:, 1],
-            (noise.get(idx, policy.num_params) for idx in noise_inds_n),
-            batch_size=500
-        )
-        g /= returns_n2.size
-        assert g.shape == (policy.num_params,) and g.dtype == np.float32 and count == len(noise_inds_n)
-        update_ratio = optimizer.update(-g + config.l2coeff * theta)
+            # Assemble results
+            noise_inds_n = np.concatenate([r.noise_inds_n for r in curr_task_results])
+            returns_n2 = np.concatenate([r.returns_n2 for r in curr_task_results])
+            lengths_n2 = np.concatenate([r.lengths_n2 for r in curr_task_results])
+            assert noise_inds_n.shape[0] == returns_n2.shape[0] == lengths_n2.shape[0]
+            # Process returns (ES)
+            if config.return_proc_mode == 'centered_rank':
+                proc_returns_n2 = compute_centered_ranks(returns_n2)
+            elif config.return_proc_mode == 'sign':
+                proc_returns_n2 = np.concatenate([r.signreturns_n2 for r in curr_task_results])
+            elif config.return_proc_mode == 'centered_sign_rank':
+                proc_returns_n2 = compute_centered_ranks(np.concatenate([r.signreturns_n2 for r in curr_task_results]))
+            else:
+                raise NotImplementedError(config.return_proc_mode)
+            # Compute and take step (ES)
+            g, count = batched_weighted_sum(
+                proc_returns_n2[:, 0] - proc_returns_n2[:, 1],
+                (noise.get(idx, policy.num_params) for idx in noise_inds_n),
+                batch_size=500  # why is this hard-coded?
+            )
+            g /= returns_n2.size
+            assert g.shape == (policy.num_params,) and g.dtype == np.float32 and count == len(noise_inds_n)
+            update_ratio = optimizer.update(-g + config.l2coeff * theta)
 
-        # Update ob stat (we're never running the policy in the master, but we might be snapshotting the policy)
-        if policy.needs_ob_stat:
-            policy.set_ob_stat(ob_stat.mean, ob_stat.std)
+            # Update ob stat (we're never running the policy in the master, but we might be snapshotting the policy)
+            if policy.needs_ob_stat:
+                policy.set_ob_stat(ob_stat.mean, ob_stat.std)
 
-        step_tend = time.time()
-        tlogger.record_tabular("EpRewMean", returns_n2.mean())
-        tlogger.record_tabular("EpRewStd", returns_n2.std())
-        tlogger.record_tabular("EpLenMean", lengths_n2.mean())
+            step_tend = time.time()
+            tlogger.record_tabular("EpRewMean", returns_n2.mean())
+            tlogger.record_tabular("EpRewStd", returns_n2.std())
+            tlogger.record_tabular("EpLenMean", lengths_n2.mean())
 
-        tlogger.record_tabular("EvalEpRewMean", np.nan if not eval_rets else np.mean(eval_rets))
-        tlogger.record_tabular("EvalEpRewStd", np.nan if not eval_rets else np.std(eval_rets))
-        tlogger.record_tabular("EvalEpLenMean", np.nan if not eval_rets else np.mean(eval_lens))
-        tlogger.record_tabular("EvalPopRank", np.nan if not eval_rets else (
-            np.searchsorted(np.sort(returns_n2.ravel()), eval_rets).mean() / returns_n2.size))   # ???
-        tlogger.record_tabular("EvalEpCount", len(eval_rets))
+            tlogger.record_tabular("EvalEpRewMean", np.nan if not eval_rets else np.mean(eval_rets))
+            tlogger.record_tabular("EvalEpRewStd", np.nan if not eval_rets else np.std(eval_rets))
+            tlogger.record_tabular("EvalEpLenMean", np.nan if not eval_rets else np.mean(eval_lens))
+            tlogger.record_tabular("EvalPopRank", np.nan if not eval_rets else (
+                np.searchsorted(np.sort(returns_n2.ravel()), eval_rets).mean() / returns_n2.size))   # ???
+            tlogger.record_tabular("EvalEpCount", len(eval_rets))
 
-        tlogger.record_tabular("Norm", float(np.square(policy.get_trainable_flat()).sum()))
-        tlogger.record_tabular("GradNorm", float(np.square(g).sum()))
-        tlogger.record_tabular("UpdateRatio", float(update_ratio))
+            tlogger.record_tabular("Norm", float(np.square(policy.get_trainable_flat()).sum()))
+            tlogger.record_tabular("GradNorm", float(np.square(g).sum()))
+            tlogger.record_tabular("UpdateRatio", float(update_ratio))
 
-        tlogger.record_tabular("EpisodesThisIter", lengths_n2.size)
-        tlogger.record_tabular("EpisodesSoFar", episodes_so_far)
-        tlogger.record_tabular("TimestepsThisIter", lengths_n2.sum())
-        tlogger.record_tabular("TimestepsSoFar", timesteps_so_far)
+            tlogger.record_tabular("EpisodesThisIter", lengths_n2.size)
+            tlogger.record_tabular("EpisodesSoFar", episodes_so_far)
+            tlogger.record_tabular("TimestepsThisIter", lengths_n2.sum())
+            tlogger.record_tabular("TimestepsSoFar", timesteps_so_far)
 
-        num_unique_workers = len(set(worker_ids))
-        tlogger.record_tabular("UniqueWorkers", num_unique_workers)
-        tlogger.record_tabular("UniqueWorkersFrac", num_unique_workers / len(worker_ids))
-        tlogger.record_tabular("ResultsSkippedFrac", frac_results_skipped)
-        tlogger.record_tabular("ObCount", ob_count_this_batch)
+            num_unique_workers = len(set(worker_ids))
+            tlogger.record_tabular("UniqueWorkers", num_unique_workers)
+            tlogger.record_tabular("UniqueWorkersFrac", num_unique_workers / len(worker_ids))
+            tlogger.record_tabular("ResultsSkippedFrac", frac_results_skipped)
+            tlogger.record_tabular("ObCount", ob_count_this_batch)
 
-        tlogger.record_tabular("TimeElapsedThisIter", step_tend - step_tstart)
-        tlogger.record_tabular("TimeElapsed", step_tend - tstart)
-        tlogger.dump_tabular()
+            tlogger.record_tabular("TimeElapsedThisIter", step_tend - step_tstart)
+            tlogger.record_tabular("TimeElapsed", step_tend - tstart)
+            tlogger.dump_tabular()
+        else:  # A3C master step
+            # no batch? just perform gradient updates from one rollout?
+            # would it ever be an issue that results are not for the current task?
+            # shouldn't matter if I do parameter updates in master?
+
+            # Wait for a result
+            task_id, batch = master.pop_result()
+            assert isinstance(task_id, int) and isinstance(batch, Batch)
+
+            feed_dict = {  # ???
+                policy.x: batch.si,
+                ac: batch.a,
+                adv: batch.adv,
+                r: batch.r,
+                policy.state_in[0]: batch.features[0],
+                policy.stae_in[1]: batch.features[1]
+            }
+
+            # ???
+            fetched = sess.run([policy.logits, policy.vf], feed_dict=feed_dict)  # TODO: check this
+
+            log_prob_tf = tf.nn.log_softmax(policy.logits)  # matters if it's not pi?
+            prob_tf = tf.nn.softmax(policy.logits)  # matters if it's not pi?
+
+            # the "policy gradients" loss: its derivative is precisely the policy gradient
+            # notice that ac is a placeholder that is provided externally. (?)
+            # adv will contain the advantages, as calculated in process_rollout
+            pi_loss = - tf.reduce_sum(tf.reduce_sum(log_prob_tf * ac), [1] * adv)
+
+            # loss of value function
+            vf_loss = 0.5 * tf.reduce_sum(tf.square(policy.vf - r))
+            entropy = - tf.reduce_sum(prob_tf * log_prob_tf)
+
+            bs = tf.to_float(tf.shape(policy.x)[0])  # batch size
+            loss = pi_loss + 0.5 * vf_loss - entropy * 0.01
+
+            grads = tf.gradients(loss, policy.trainable_variables)
+            grads, _ = tf.clip_by_global_norm(grads, 40.0)  # ???
+            # grads_and_vars = list(zip(grads, policy.trainable_variables))
+
+            update_ratio = optimizer.update(-grads + config.l2coeff * theta)  # ???
+
+            # TODO: tlogger for A3C master step
 
         # save a snapshot of the policy
         if config.snapshot_freq != 0 and curr_task_id % config.snapshot_freq == 0:
@@ -292,6 +378,10 @@ def run_master(master_redis_cfg, log_dir, exp):
             ))
             policy.save(filename)
             tlogger.log('Saved snapshot {}'.format(filename))
+
+        if curr_task_id % config.switch_freq == 0:
+            # want exponentially decreasing probability? make this a hyperparameter if so?
+            es_a3c = rs.rand() < np.power(config.es_a3c_prob, curr_task_id)
 
 
 def rollout_and_update_ob_stat(policy, env, rs, task_ob_stat, calc_obstat_prob):
@@ -317,48 +407,14 @@ def run_worker(relay_redis_cfg, noise, min_task_runtime=1.):  # what should min_
     # TODO: write summaries from workers?
     # TODO: communicate {num_local_steps, } from master
 
-    ac = tf.placeholder(tf.float32, [None, len(policy.ac_space)], name="ac")  # check this
-    adv = tf.placeholder(tf.float32, [None], name="adv")
-    r = tf.placeholder(tf.float32, [None], name="r")
-
-    log_prob_tf = tf.nn.log_softmax(policy.logits)
-    prob_tf = tf.nn.softmax(policy.logits)
-
-    # the "policy gradients" loss: its derivative is precisely the policy gradient
-    # notice that ac is a placeholder that is provided externally. (?)
-    # adv will contain the advantages, as calculated in process_rollout (?)
-    pi_loss = - tf.reduce_sum(tf.reduce_sum(log_prob_tf * ac, [1]), *adv)  # check this
-
-    # loss of value function
-    vf_loss = 0.5 * tf.reduce_sum(tf.square(policy.vf - r))
-    entropy = - tf.reduce_sum(prob_tf * log_prob_tf)
-
-    bs = tf.to_float(tf.shape(policy.x)[0])  # batch size
-    loss = pi_loss + 0.5 * vf_loss - entropy * 0.01
-
-    grads = tf.gradients(loss, policy.trainable_variables)
-    # tf summaries?
-    grads, _ = tf.clip_by_global_norm(grads, 40.0)  # global norm?
-
-    # copy weights from the master to the local model (HOW???)
-    policy.set_trainable_flat(task_data.params)
-
-    grads_and_vars = list(zip(grads, task_data.params))  # in right order?
-    inc_step = global_step.assign_add(tf.shape(policy.x)[0])
-
-    # each worker has a different set of adam optimizer parameters
-    opt = tf.train.AdamOptimizer(1e-4)  # TODO: set to hyperparameter (and make consistent with es)
-    train_op = tf.group(opt.apply_gradients(grads_and_vars), inc_step)  # ???
-    local_steps = 0  # ???
-
     while True:
         # retrieve and check current task
         task_id, task_data = worker.get_current_task()
         task_tstart = time.time()
-        assert isinstance(task_id, int) and (isinstance(task_data, ES_Task) or isinstance(task_data, A3C_Task))
+        assert isinstance(task_id, int) and isinstance(task_data, Task)
 
-        if isinstance(task_data, ES_Task):  # ES worker step
-            # TODO: check if all below exclusive to es
+        if not task_data.a3c:  # ES worker step
+            # do ob_stat stuff for a3c as well?
             if policy.needs_ob_stat:
                 policy.set_ob_stat(task_data.ob_mean, task_data.ob_std)
 
@@ -418,6 +474,8 @@ def run_worker(relay_redis_cfg, noise, min_task_runtime=1.):  # what should min_
                     ob_count=task_ob_stat.count
                 ))
         else:  # A3C worker step
+            # should definitely be doing more here...
+            # should also do ob_stat update with A3C?
             policy.set_trainable_flat(task_data.params)
 
             # TODO: set num_local_steps as hyperparameter
@@ -428,7 +486,6 @@ def run_worker(relay_redis_cfg, noise, min_task_runtime=1.):  # what should min_
             # TODO: set gamma and lambda_ as hyperparameters
             batch = process_rollout(rollout, gamma=0.99, lambda_=1.0)
 
-            # should_compute_summary?
-            fetches = [tf.group(opt.apply_gradients(grads_and_vars), inc_step)]
+            worker.push_result(task_id, batch)
 
 
