@@ -283,7 +283,7 @@ class AtariPolicy(Policy):
             lstm_c, lstm_h = lstm_state
             x = tf.reshape(lstm_outputs, [-1, self.lstm_size])
             self.logits = U.dense(x, self.ac_space.n, 'action', U.normc_initializer(0.01))
-	    self.ac_probs = tf.nn.softmax(self.logits)
+            self.ac_probs = tf.nn.softmax(self.logits)
             self.state_out = [lstm_c[:1, :], lstm_h[:1, :]]
             #self.sample = U.categorical_sample(self.logits, self.ac_space.n)[0, :]
 
@@ -296,7 +296,7 @@ class AtariPolicy(Policy):
         sess = U.get_session()
         a, c1, h1 = sess.run([self.ac_probs] + self.state_out,
                      {self.x: [ob], self.state_in[0]: c0, self.state_in[1]: h0})
-        #if random_stream is not None and self.ac_noise_std != 0:
+        #if random_stream is not None and self.ac_noise_std != 0:  # only use if using one-hot and argmax
         #    a += random_stream.randn(*a.shape) * self.ac_noise_std
         return a, c1, h1   # softmax vector
 
@@ -314,9 +314,10 @@ class AtariPolicy(Policy):
         while True:
             fetched = self.act(last_ob, *last_features, random_stream=random_stream)
             ac, last_features = fetched[0], fetched[1:]
+            ac = ac.squeeze()
             if save_obs:
                 obs.append(last_ob)
-	    ac = np.random.choice(np.arange(len(ac)), p=ac)
+            ac = np.random.choice(np.arange(len(ac)), p=ac)
             last_ob, rew, done, _ = env.step(ac)
             rews.append(rew)
             t += 1
