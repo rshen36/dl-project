@@ -283,8 +283,9 @@ class AtariPolicy(Policy):
             lstm_c, lstm_h = lstm_state
             x = tf.reshape(lstm_outputs, [-1, self.lstm_size])
             self.logits = U.dense(x, self.ac_space.n, 'action', U.normc_initializer(0.01))
+	    self.ac_probs = tf.nn.softmax(self.logits)
             self.state_out = [lstm_c[:1, :], lstm_h[:1, :]]
-            self.sample = U.categorical_sample(self.logits, self.ac_space.n)[0, :]
+            #self.sample = U.categorical_sample(self.logits, self.ac_space.n)[0, :]
 
         return scope
 
@@ -293,10 +294,10 @@ class AtariPolicy(Policy):
 
     def act(self, ob, c0, h0, random_stream=None):
         sess = U.get_session()
-        a, c1, h1 = sess.run([self.sample] + self.state_out,
+        a, c1, h1 = sess.run([self.ac_probs] + self.state_out,
                      {self.x: [ob], self.state_in[0]: c0, self.state_in[1]: h0})
-        if random_stream is not None and self.ac_noise_std != 0:
-            a += random_stream.randn(*a.shape) * self.ac_noise_std
+        #if random_stream is not None and self.ac_noise_std != 0:
+        #    a += random_stream.randn(*a.shape) * self.ac_noise_std
         return a, c1, h1   # softmax vector
 
     def rollout(self, env, render=False, save_obs=False, random_stream=None):
@@ -315,12 +316,12 @@ class AtariPolicy(Policy):
             ac, last_features = fetched[0], fetched[1:]
             if save_obs:
                 obs.append(last_ob)
-            last_ob, rew, done, _ = env.step(ac.argmax())  # always want the argmax?
+	    ac = np.random.choice(np.arange(len(ac)), p=ac)
+            last_ob, rew, done, _ = env.step(ac)
             rews.append(rew)
             t += 1
             if render:
                 env.render()
-            # tensorboard summary?
             if done:
                 break
         rews = np.array(rews, dtype=np.float32)
