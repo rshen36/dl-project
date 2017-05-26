@@ -5,14 +5,11 @@ import itertools
 import time
 from collections import namedtuple
 
-import gym
 import tensorflow as tf
 import numpy as np
 
-from lib.atari import helpers as atari_helpers  # for preprocessing Atari environments
 from .dist import MasterClient, WorkerClient
-from .estimators import PolicyEstimator, ValueEstimator
-from .a3c_worker import Worker
+from .policies import process_rollout
 
 logging.basicConfig(filename='experiment.log', level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -23,19 +20,19 @@ Config = namedtuple('Config', [
     'return_proc_mode', 'episode_cutoff_mode'
 ])
 Task = namedtuple('Task', ['params', 'ob_mean', 'ob_std'])
-# TaskA3C = namedtuple()
-Result = namedtuple('Result', [
+Result = namedtuple('Result', [  # need to make distinct results for es and a3c?
     'worker_id',
     'noise_inds_n', 'returns_n2', 'signreturns_n2', 'lengths_n2',
     'eval_return', 'eval_length',
     'ob_sum', 'ob_sumsq', 'ob_count'
 ])
+# make separate es and a3c helper function files?
 
 
-class RunningStat(object):   # declares the class to be a new-style class
+class RunningStat(object):
     def __init__(self, shape, eps):
         self.sum = np.zeros(shape, dtype=np.float32)
-        self.sumsq = np.full(shape, eps, dtype=np.float32)   # returns array of given shape with given fill vals
+        self.sumsq = np.full(shape, eps, dtype=np.float32)
         self.count = eps
 
     def increment(self, s, ssq, c):
@@ -63,8 +60,7 @@ class SharedNoiseTable(object):   # sharing same noise among all workers
         seed = 123
 
         # may need to adapt this number
-        #count = 250000000   # 1 gigabyte of 32-bit numbers. Will actually sample 2 gigabytes below.
-        count = 2500000
+        count = 250000000   # 1 gigabyte of 32-bit numbers. Will actually sample 2 gigabytes below.
 
         logger.info('Sampling {} random numbers with seed {}'.format(count, seed))
         self._shared_mem = multiprocessing.Array(ctypes.c_float, count)   # ???
@@ -98,15 +94,7 @@ def compute_centered_ranks(x):
     return y
 
 
-def make_session(single_threaded):
-    import tensorflow as tf
-    if not single_threaded:
-        return tf.InteractiveSession()
-    return tf.InteractiveSession(config=tf.ConfigProto(inter_op_parallelism_threads=1,
-                                                       intra_op_parallelism_threads=1))
-
-
-def itergroups(items, group_size):   # grab group of size group_size from start of items?
+def itergroups(items, group_size):
     assert group_size >= 1
     group = []
     for x in items:
@@ -128,24 +116,22 @@ def batched_weighted_sum(weights, vecs, batch_size):
     return total, num_items_summed
 
 
-def make_env(env_id, wrap=True):
-    env = gym.envs.make(env_id)
-    # remove the timelimitwrapper
-    env = env.env
-    if wrap:
-        env = atari_helpers.AtariEnvWrapper(env)
-
-    return env
+def make_session(single_threaded):
+    if not single_threaded:
+        return tf.InteractiveSession()
+    return tf.InteractiveSession(config=tf.ConfigProto(inter_op_parallelism_threads=1,
+                                                       intra_op_parallelism_threads=1))
 
 
 def setup(exp, single_threaded):
+    import gym
     gym.undo_logger_setup()   # to allow for own logging
     from es_distributed import tf_util
     from es_distributed import policies
     limit = False
 
     config = Config(**exp['config'])
-    env = make_env(exp['env_id'])
+    env = gym.make(exp['env_id'])
     if exp['env_id'] == "Pong-v0" or exp['env_id'] == "Breakout-v0":  # recommendation from Denny Britz
         limit = True
     sess = make_session(single_threaded=single_threaded)
@@ -176,32 +162,10 @@ def run_master(master_redis_cfg, log_dir, exp):
     #     logger.info('Initializing weights from {}'.format(exp['policy']['init_from']))
     #     policy.initialize_from(exp['policy']['init_from'], ob_stat)
 
-    global_step = tf.Variable(0, name="global_step", trainable=False)  # A3C
-    episodes_so_far = 0  # why not tf variable?
-    # episodes_so_far = tf.Variable(0, name="episodes_so_far", trainable=False)
-    timesteps_so_far = 0  # why not tf variable?
-    # timesteps_so_far = tf.Variable(0, name="timesteps_so_far", trainable=False)
+    episodes_so_far = 0
+    timesteps_so_far = 0
     tstart = time.time()
     master.declare_experiment(exp)
-
-    # A3C: global policy and value nets
-    # TODO: update below for current communication structure
-    with tf.variable_scope("global") as vs:
-        if exp['env_id'] == "Pong-v0" or exp['env_id'] == "Breakout-v0":  # recommendation from Denny Britz
-            n_outputs = 4
-        else:
-            n_outputs = env.action_space.n
-
-        # TODO: communicate Config optimizer parameter to these classes (anything else as well?)
-        a3c_policy_net = PolicyEstimator(num_outputs=n_outputs)
-        a3c_value_net = ValueEstimator(reuse=True)
-
-    # global step iterator
-    # necessary for doing partial rollouts in a3c_worker
-    global_counter = itertools.count()  # may need to move/update this
-
-    # TODO: figure out how to efficiently communicate policy_net, value_net, and global_counter to workers
-    # TODO: incorporate t_max, max_global_steps (?), and eval_every (?) parameters
 
     while True:
         step_tstart = time.time()
@@ -222,7 +186,7 @@ def run_master(master_redis_cfg, log_dir, exp):
             # Wait for a result
             task_id, result = master.pop_result()
             assert isinstance(task_id, int) and isinstance(result, Result)
-            assert (result.eval_return is None) == (result.eval_length is None)   # must either be both T or both F?
+            assert (result.eval_return is None) == (result.eval_length is None)
             worker_ids.append(result.worker_id)
 
             if result.eval_length is not None:
@@ -351,69 +315,120 @@ def run_worker(relay_redis_cfg, noise, min_task_runtime=1.):  # what should min_
     assert policy.needs_ob_stat == (config.calc_obstat_prob != 0)
 
     # TODO: write summaries from workers?
-    # worker_summary_writer = None
-    # if worker_id == 0:  # will need to figure out a way around this
-    #     worker_summary_writer = summary_writer
+    # TODO: communicate {num_local_steps, } from master
+
+    ac = tf.placeholder(tf.float32, [None, len(policy.ac_space)], name="ac")  # check this
+    adv = tf.placeholder(tf.float32, [None], name="adv")
+    r = tf.placeholder(tf.float32, [None], name="r")
+
+    log_prob_tf = tf.nn.log_softmax(policy.logits)
+    prob_tf = tf.nn.softmax(policy.logits)
+
+    # the "policy gradients" loss: its derivative is precisely the policy gradient
+    # notice that ac is a placeholder that is provided externally. (?)
+    # adv will contain the advantages, as calculated in process_rollout (?)
+    pi_loss = - tf.reduce_sum(tf.reduce_sum(log_prob_tf * ac, [1]), *adv)  # check this
+
+    # loss of value function
+    vf_loss = 0.5 * tf.reduce_sum(tf.square(policy.vf - r))
+    entropy = - tf.reduce_sum(prob_tf * log_prob_tf)
+
+    bs = tf.to_float(tf.shape(policy.x)[0])  # batch size
+    loss = pi_loss + 0.5 * vf_loss - entropy * 0.01
+
+    grads = tf.gradients(loss, policy.trainable_variables)
+    # tf summaries?
+    grads, _ = tf.clip_by_global_norm(grads, 40.0)  # global norm?
+
+    # copy weights from the master to the local model (HOW???)
+    policy.set_trainable_flat(task_data.params)
+
+    grads_and_vars = list(zip(grads, task_data.params))  # in right order?
+    inc_step = global_step.assign_add(tf.shape(policy.x)[0])
+
+    # each worker has a different set of adam optimizer parameters
+    opt = tf.train.AdamOptimizer(1e-4)  # TODO: set to hyperparameter (and make consistent with es)
+    train_op = tf.group(opt.apply_gradients(grads_and_vars), inc_step)  # ???
+    local_steps = 0  # ???
 
     while True:
+        # retrieve and check current task
         task_id, task_data = worker.get_current_task()
         task_tstart = time.time()
-        assert isinstance(task_id, int) and isinstance(task_data, Task)
-        if policy.needs_ob_stat:
-            policy.set_ob_stat(task_data.ob_mean, task_data.ob_std)
+        assert isinstance(task_id, int) and (isinstance(task_data, ES_Task) or isinstance(task_data, A3C_Task))
 
-        if rs.rand() < config.eval_prob:
-            # Evaluation: noiseless weights and noiseless actions
+        if isinstance(task_data, ES_Task):  # ES worker step
+            # TODO: check if all below exclusive to es
+            if policy.needs_ob_stat:
+                policy.set_ob_stat(task_data.ob_mean, task_data.ob_std)
+
+            if rs.rand() < config.eval_prob:
+                # Evaluation: noiseless weights and noiseless actions
+                policy.set_trainable_flat(task_data.params)
+                eval_rews, eval_length = policy.rollout(env)
+                eval_return = eval_rews.sum()
+                logger.info('Eval rewards: {}'.format(eval_rews))
+                logger.info('Eval result: task={} return={:3f} length={}'.format(task_id, eval_return, eval_length))
+                worker.push_result(task_id, Result(
+                    worker_id=worker_id,
+                    noise_inds_n=None,
+                    returns_n2=None,
+                    signreturns_n2=None,
+                    lengths_n2=None,
+                    eval_return=eval_return,
+                    eval_length=eval_length,
+                    ob_sum=None,
+                    ob_sumsq=None,
+                    ob_count=None
+                ))
+            else:
+                # Rollouts with noise
+                noise_inds, returns, signreturns, lengths = [], [], [], []
+                task_ob_stat = RunningStat(env.observation_space.shape, eps=0.)   # eps=0 bc only incrementing
+
+                while not noise_inds or time.time() - task_tstart < min_task_runtime:
+                    noise_idx = noise.sample_index(rs, policy.num_params)   # sampling indices for random noise values?
+                    v = config.noise_stdev * noise.get(noise_idx, policy.num_params)
+
+                    # finite differences (adding and subtracting v)?
+                    policy.set_trainable_flat(task_data.params + v)
+                    rews_pos, len_pos = rollout_and_update_ob_stat(
+                        policy, env, rs, task_ob_stat, config.calc_obstat_prob)
+
+                    policy.set_trainable_flat(task_data.params - v)
+                    rews_neg, len_neg = rollout_and_update_ob_stat(
+                        policy, env, rs, task_ob_stat, config.calc_obstat_prob)
+
+                    # want to keep track of sign returns bc of way fd calculated?
+                    noise_inds.append(noise_idx)
+                    returns.append([rews_pos.sum(), rews_neg.sum()])
+                    signreturns.append([np.sign(rews_pos).sum(), np.sign(rews_neg).sum()])
+                    lengths.append([len_pos, len_neg])
+
+                worker.push_result(task_id, Result(
+                    worker_id=worker_id,
+                    noise_inds_n=np.array(noise_inds),
+                    returns_n2=np.array(returns, dtype=np.float32),
+                    signreturns_n2=np.array(signreturns, dtype=np.float32),
+                    lengths_n2=np.array(lengths, dtype=np.int32),
+                    eval_return=None,
+                    eval_length=None,
+                    ob_sum=None if task_ob_stat.count == 0 else task_ob_stat.sum,
+                    ob_sumsq=None if task_ob_stat.count == 0 else task_ob_stat.sumsq,
+                    ob_count=task_ob_stat.count
+                ))
+        else:  # A3C worker step
             policy.set_trainable_flat(task_data.params)
-            eval_rews, eval_length = policy.rollout(env)
-            eval_return = eval_rews.sum()
-            logger.info('Eval rewards: {}'.format(eval_rews))
-            logger.info('Eval result: task={} return={:3f} length={}'.format(task_id, eval_return, eval_length))
-            worker.push_result(task_id, Result(
-                worker_id=worker_id,
-                noise_inds_n=None,
-                returns_n2=None,
-                signreturns_n2=None,
-                lengths_n2=None,
-                eval_return=eval_return,
-                eval_length=eval_length,
-                ob_sum=None,
-                ob_sumsq=None,
-                ob_count=None
-            ))
-        else:
-            # Rollouts with noise
-            noise_inds, returns, signreturns, lengths = [], [], [], []
-            task_ob_stat = RunningStat(env.observation_space.shape, eps=0.)   # eps=0 bc only incrementing
 
-            while not noise_inds or time.time() - task_tstart < min_task_runtime:
-                noise_idx = noise.sample_index(rs, policy.num_params)   # sampling indices for random noise values?
-                v = config.noise_stdev * noise.get(noise_idx, policy.num_params)
+            # TODO: set num_local_steps as hyperparameter
+            rollout = policy.partial_rollout(env, num_local_steps=20)  # ???
+            while not rollout.terminal:  # unnecessary to do partial rollouts if no queue?
+                rollout.extend(policy.partial_rollout(env, num_local_steps=20))
 
-                # finite differences (adding and subtracting v)?
-                policy.set_trainable_flat(task_data.params + v)
-                rews_pos, len_pos = rollout_and_update_ob_stat(
-                    policy, env, rs, task_ob_stat, config.calc_obstat_prob)
+            # TODO: set gamma and lambda_ as hyperparameters
+            batch = process_rollout(rollout, gamma=0.99, lambda_=1.0)
 
-                policy.set_trainable_flat(task_data.params - v)
-                rews_neg, len_neg = rollout_and_update_ob_stat(
-                    policy, env, rs, task_ob_stat, config.calc_obstat_prob)
+            # should_compute_summary?
+            fetches = [tf.group(opt.apply_gradients(grads_and_vars), inc_step)]
 
-                # want to keep track of sign returns bc of way fd calculated?
-                noise_inds.append(noise_idx)
-                returns.append([rews_pos.sum(), rews_neg.sum()])
-                signreturns.append([np.sign(rews_pos).sum(), np.sign(rews_neg).sum()])
-                lengths.append([len_pos, len_neg])
 
-            worker.push_result(task_id, Result(
-                worker_id=worker_id,
-                noise_inds_n=np.array(noise_inds),
-                returns_n2=np.array(returns, dtype=np.float32),
-                signreturns_n2=np.array(signreturns, dtype=np.float32),
-                lengths_n2=np.array(lengths, dtype=np.int32),
-                eval_return=None,
-                eval_length=None,
-                ob_sum=None if task_ob_stat.count == 0 else task_ob_stat.sum,
-                ob_sumsq=None if task_ob_stat.count == 0 else task_ob_stat.sumsq,
-                ob_count=task_ob_stat.count
-            ))
