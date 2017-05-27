@@ -225,6 +225,8 @@ def run_master(master_redis_cfg, log_dir, exp):
             while num_episodes_popped < config.episodes_per_batch or num_timesteps_popped < config.timesteps_per_batch:
                 # Wait for a result
                 task_id, result = master.pop_result()
+                if isinstance(result, Fetched):  # TODO: figure out better way to do this
+                    continue
                 assert isinstance(task_id, int) and isinstance(result, Result)
                 assert (result.eval_return is None) == (result.eval_length is None)
                 worker_ids.append(result.worker_id)
@@ -333,6 +335,8 @@ def run_master(master_redis_cfg, log_dir, exp):
             while num_episodes_popped < eps_per_batch or num_timesteps_popped < tsteps_per_batch:
                 # Wait for a result
                 task_id, f = master.pop_result()
+                if isinstance(f, Result):  # TODO: figure out better way to do this
+                    continue
                 assert isinstance(task_id, int) and isinstance(f, Fetched)
                 worker_ids.append(f.worker_id)
                 if f.terminal:  # full rollout
