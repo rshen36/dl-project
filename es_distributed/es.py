@@ -11,7 +11,6 @@ import numpy as np
 
 from es_distributed import tf_util as U
 from .dist import MasterClient, WorkerClient
-from .policies import PartialRollout
 
 logging.basicConfig(filename='experiment.log', level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -29,8 +28,10 @@ Result = namedtuple('Result', [
     'eval_return', 'eval_length',
     'ob_sum', 'ob_sumsq', 'ob_count'
 ])
-Fetched = namedtuple('fetched', [
-    'worker_id', 'terminal', 'num_local_steps', 'grads', 'rewards'
+Fetched = namedtuple('Fetched', [
+    'worker_id', 'grads',
+    'terminal', 'ep_return', 'ep_length',
+    'eval_return', 'eval_length'
 ])
 Batch = namedtuple('Batch', ['si', 'a', 'adv', 'r', 'terminal', 'features'])
 # make separate es and a3c helper function files?
@@ -323,43 +324,57 @@ def run_master(master_redis_cfg, log_dir, exp):
             tlogger.dump_tabular()
         else:  # A3C master step
             # Pop off results for the current task
-            # curr_task_results, eval_rets, eval_lens, worker_ids = [], [], [], []
-            worker_ids, returns, lengths = [], [], []
+            eval_rets, eval_lens, returns, lengths, worker_ids = [], [], [], [], []
             num_episodes_popped, num_updates_skipped, num_updates_popped, num_timesteps_popped = 0, 0, 0, 0
             # ob_count_this_batch = 0
-            # TODO: fix this header for a3c
-            while num_episodes_popped < config.episodes_per_batch or num_timesteps_popped < config.timesteps_per_batch:
+
+            eps_per_batch = config.episodes_per_batch / 20
+            tsteps_per_batch = config.timesteps_per_batch / 20
+            while num_episodes_popped < eps_per_batch or num_timesteps_popped < tsteps_per_batch:
                 # Wait for a result
                 task_id, f = master.pop_result()
                 assert isinstance(task_id, int) and isinstance(f, Fetched)
                 worker_ids.append(f.worker_id)
-                if len(f.rewards) > 0:  # full rollout
-                    returns.append(np.sum(f.rewards))
-                    lengths.append(len(f.rewards))
+                if f.terminal:  # full rollout
+                    # additional gradient update on entire rollout?
+                    # would it ever be an issue here of task != curr_task?
+                    # if task_id == curr_task_id:
+                    returns.append(f.ep_return)
+                    lengths.append(f.ep_length)
 
-                # TODO: eval iterations
-
-                # Update counts
-                num_episodes_popped += 1 if f.terminal else 0
-                # num_timesteps = f.num_local_steps
-                updates_so_far += 1
-                timesteps_so_far += f.num_local_steps
-                # Store results only for current tasks
-                if task_id == curr_task_id:
-                    # curr_task_results.append(result)
-                    num_updates_popped += 1
-                    num_timesteps_popped += f.num_local_steps
-                    # Update ob stats
-                    # if policy.needs_ob_stat and result.ob_count > 0:
-                    #     ob_stat.increment(result.ob_sum, result.ob_sumsq, result.ob_count)
-                    #     ob_count_this_batch += result.ob_count
+                    # Update counts
+                    num_episodes_popped += 1
+                    episodes_so_far += 1
+                    # timesteps_so_far += config.num_local_steps  # technically wrong
                 else:
-                    num_updates_skipped += 1
+                    # TODO: eval iterations
+                    if f.eval_length is not None:
+                        # This was an eval job
+                        episodes_so_far += 1
+                        timesteps_so_far += result.eval_length
+                        # Store the result only for the current task
+                        if task_id == curr_task_id:
+                            eval_rets.append(result.eval_return)
+                            eval_lens.append(result.eval_length)
+                    else:
+                        # Update counts
+                        updates_so_far += 1
+                        timesteps_so_far += config.num_local_steps  # TODO: improve on this
+                        # Store results only for current tasks
+                        if task_id == curr_task_id:
+                            num_updates_popped += 1
+                            num_timesteps_popped += config.num_local_steps
+                            # Update ob stats
+                            # if policy.needs_ob_stat and result.ob_count > 0:
+                            #     ob_stat.increment(result.ob_sum, result.ob_sumsq, result.ob_count)
+                            #     ob_count_this_batch += result.ob_count
+                        else:
+                            num_updates_skipped += 1
 
-                # gradient updates for every partial rollout?
-                g = f.grads
-                assert g.shape == (policy.num_params,) and g.dtype == np.float32
-                update_ratio = optimizer.update(-g + config.l2coeff * theta)
+                        # gradient updates for every partial rollout?
+                        g = f.grads
+                        assert g.shape == (policy.num_params,) and g.dtype == np.float32
+                        update_ratio = optimizer.update(-g + config.l2coeff * theta)
 
             # Compute skip fraction
             frac_updates_skipped = num_updates_skipped / (num_updates_skipped + num_updates_popped)
@@ -372,13 +387,20 @@ def run_master(master_redis_cfg, log_dir, exp):
             #     policy.set_ob_stat(ob_stat.mean, ob_stat.std)
 
             step_tend = time.time()
-            tlogger.record_tabular("a3c/EpRewMean", returns.mean())
-            tlogger.record_tabular("a3c/EpRewStd", returns.std())
-            tlogger.record_tabular("a3c/EpLenMean", lengths.mean())
+            tlogger.record_tabular("a3c/EpRewMean", np.mean(returns))
+            tlogger.record_tabular("a3c/EpRewStd", np.std(returns))
+            tlogger.record_tabular("a3c/EpLenMean", np.mean(lengths))
+
+            tlogger.record_tabular("a3c/EvalEpRewMean", np.nan if not eval_rets else np.mean(eval_rets))
+            tlogger.record_tabular("a3c/EvalEpRewStd", np.nan if not eval_rets else np.std(eval_rets))
+            tlogger.record_tabular("a3c/EvalEpLenMean", np.nan if not eval_rets else np.mean(eval_lens))
+            tlogger.record_tabular("a3c/EvalPopRank", np.nan if not eval_rets else (
+                np.searchsorted(np.sort(returns_n2.ravel()), eval_rets).mean() / returns_n2.size))  # ???
+            tlogger.record_tabular("a3c/EvalEpCount", len(eval_rets))
 
             tlogger.record_tabular("a3c/Norm", float(np.square(policy.get_trainable_flat()).sum()))
-            # tlogger.record_tabular("es/GradNorm", float(np.square(g).sum()))
-            # tlogger.record_tabular("es/UpdateRatio", float(update_ratio))
+            # tlogger.record_tabular("a3c/GradNorm", float(np.square(g).sum()))
+            # tlogger.record_tabular("a3c/UpdateRatio", float(update_ratio))
 
             tlogger.record_tabular("a3c/UpdatesThisIter", num_updates_popped)
             tlogger.record_tabular("a3c/UpdatesSoFar", updates_so_far)
@@ -420,7 +442,7 @@ def rollout_and_update_ob_stat(policy, env, rs, task_ob_stat, calc_obstat_prob):
     return rollout_rews, rollout_len
 
 
-def run_worker(relay_redis_cfg, noise, log_dir, min_task_runtime=1.):  # what should min_task_runtime default be?
+def run_worker(relay_redis_cfg, noise, min_task_runtime=1.):  # what should min_task_runtime default be?
     logger.info('run_worker: {}'.format(locals()))
     assert isinstance(noise, SharedNoiseTable)
     worker = WorkerClient(relay_redis_cfg)
@@ -428,12 +450,11 @@ def run_worker(relay_redis_cfg, noise, log_dir, min_task_runtime=1.):  # what sh
     config, env, sess, policy = setup(exp, single_threaded=True)
     rs = np.random.RandomState()
     worker_id = rs.randint(2 ** 31)   # don't have to order worker_ids and guarantee no two same id?
-    summary_writer = tf.summary.FileWriter(log_dir + "_%d" % worker_id)
+    # summary_writer = tf.summary.FileWriter(log_dir + "_%d" % worker_id)
 
     assert policy.needs_ob_stat == (config.calc_obstat_prob != 0)
 
     # TODO: set up local and global a3c steps
-    # shouldn't be in while-loop, right? setting up computational graph
     ac = tf.placeholder(tf.float32, [None, env.action_space.n], name='ac')
     adv = tf.placeholder(tf.float32, [None], name='adv')
     r = tf.placeholder(tf.float32, [None], name='r')
@@ -442,12 +463,11 @@ def run_worker(relay_redis_cfg, noise, log_dir, min_task_runtime=1.):  # what sh
     prob_tf = tf.nn.softmax(policy.logits)
 
     # the "policy gradients" loss: its derivative is precisely the policy gradient
-    # notice that ac is a placeholder that is provided externally. (?)
+    # notice that ac is a placeholder that is provided externally.
     # adv will contain the advantages, as calculated in process_rollout
     pi_loss = - tf.reduce_sum(tf.reduce_sum(log_prob_tf * ac, [1]) * adv)
 
-    # loss of value function
-    vf_loss = 0.5 * tf.reduce_sum(tf.square(policy.vf - r))
+    vf_loss = 0.5 * tf.reduce_sum(tf.square(policy.vf - r))  # loss of value function
     vf_loss = tf.cast(vf_loss, tf.float32)
     entropy = - tf.reduce_sum(prob_tf * log_prob_tf)
 
@@ -521,76 +541,104 @@ def run_worker(relay_redis_cfg, noise, log_dir, min_task_runtime=1.):  # what sh
                     ob_count=task_ob_stat.count
                 ))
         else:  # A3C worker step
-            # should also do ob_stat update with A3C?
-            policy.set_trainable_flat(task_data.params)
+            if rs.rand() < config.eval_prob * 10:
+                # Evaluation: noiseless weights and noiseless actions
+                policy.set_trainable_flat(task_data.params)
+                eval_rews, eval_length = policy.rollout(env)
+                eval_return = eval_rews.sum()
+                logger.info('Eval rewards: {}'.format(eval_rews))
+                logger.info('Eval result: task={} return={:3f} length={}'.format(task_id, eval_return, eval_length))
+                worker.push_result(task_id, Result(
+                    worker_id=worker_id,
+                    noise_inds_n=None,
+                    returns_n2=None,
+                    signreturns_n2=None,
+                    lengths_n2=None,
+                    eval_return=eval_return,
+                    eval_length=eval_length,
+                    ob_sum=None,
+                    ob_sumsq=None,
+                    ob_count=None
+                ))
+            else:
+                # TODO: should also do ob_stat update with A3C?
+                policy.set_trainable_flat(task_data.params)
 
-            # matters not inputting master variables?
-            grads = U.flatgrad(loss, policy.trainable_variables)
-            # grads, _ = tf.clip_by_global_norm(grads, 40.0)  # why 40.0?
+                # matters not inputting master variables?
+                # too large to communicate without clipping
+                grads = tf.gradients(loss, policy.trainable_variables)
+                grads, _ = tf.clip_by_global_norm(grads, 40.0)  # why 40.0?
+                grads = tf.concat([tf.reshape(grad, [U.numel(v)]) for (v, grad)
+                                   in zip(policy.trainable_variables, grads)], 0)  # flatten gradients
 
-            # tf.summary.scalar("model/policy_loss", pi_loss / bs)
-            # tf.summary.scalar("model/value_loss", vf_loss / bs)
-            # tf.summary.scalar("model/entropy", entropy / bs)
-            # tf.summary.scalar("model/loss", loss / bs)
-            # tf.summary.image("model/state", policy.x)
-            # tf.summary.scalar("model/grad_global_norm", tf.global_norm(grads))
-            # tf.summary.scalar("model/var_global_norm", tf.global_norm(policy.trainable_variables))
+                # tf.summary.scalar("model/policy_loss", pi_loss / bs)
+                # tf.summary.scalar("model/value_loss", vf_loss / bs)
+                # tf.summary.scalar("model/entropy", entropy / bs)
+                # tf.summary.scalar("model/loss", loss / bs)
+                # tf.summary.image("model/state", policy.x)
+                # tf.summary.scalar("model/grad_global_norm", tf.global_norm(grads))
+                # tf.summary.scalar("model/var_global_norm", tf.global_norm(policy.trainable_variables))
 
-            rollout_provider = policy.env_runner(env, num_local_steps=config.num_local_steps)
-            rollout = p_rollout = next(rollout_provider)
+                rollout_provider = policy.env_runner(env, num_local_steps=config.num_local_steps)
+                rollout = p_rollout = next(rollout_provider)
 
-            # tf.summary.scalar("max_value", tf.reduce_max(policy.vf))
-            # tf.summary.scalar("min_value", tf.reduce_min(policy.vf))
-            # tf.summary.scalar("mean_value", tf.reduce_mean(policy.vf))
-            # tf.summary.scalar("reward_max", tf.reduce_max(rollout.rewards))
-            # tf.summary.scalar("reward_min", tf.reduce_min(rollout.rewards))
-            # tf.summary.scalar("reward_mean", tf.reduce_mean(rollout.rewards))
-            # tf.summary.histogram("reward_targets", rollout.rewards)
-            # tf.summary.histogram("values", policy.vf)
-            # summary_op = tf.summary.merge_all()
+                # tf.summary.scalar("max_value", tf.reduce_max(policy.vf))
+                # tf.summary.scalar("min_value", tf.reduce_min(policy.vf))
+                # tf.summary.scalar("mean_value", tf.reduce_mean(policy.vf))
+                # tf.summary.scalar("reward_max", tf.reduce_max(rollout.rewards))
+                # tf.summary.scalar("reward_min", tf.reduce_min(rollout.rewards))
+                # tf.summary.scalar("reward_mean", tf.reduce_mean(rollout.rewards))
+                # tf.summary.histogram("reward_targets", rollout.rewards)
+                # tf.summary.histogram("values", policy.vf)
+                # summary_op = tf.summary.merge_all()
 
-            while not rollout.terminal:  # TODO: incorporate local and global steps
-                # TODO: set gamma and lambda_ as hyperparameters
-                batch = process_rollout(p_rollout, gamma=0.99, lambda_=1.0)
+                while not rollout.terminal:  # TODO: incorporate local and global steps
+                    # TODO: local and global steps per batch?
+                    # TODO: set gamma and lambda_ as hyperparameters
+                    batch = process_rollout(p_rollout, gamma=0.99, lambda_=1.0)
 
-                # should_compute_summary =
-                # if should_compute_summary:
-                #     fetches = [summary_op, grads, global_step]
-                # else:
-                #     fetches = [grads, global_step]
+                    # should_compute_summary =
+                    # if should_compute_summary:
+                    #     fetches = [summary_op, grads, global_step]
+                    # else:
+                    #     fetches = [grads, global_step]
 
-                feed_dict = {
-                    policy.x: batch.si,
-                    ac: batch.a,
-                    adv: batch.adv,
-                    r: batch.r,
-                    policy.state_in[0]: batch.features[0],
-                    policy.state_in[1]: batch.features[1]
-                }
+                    feed_dict = {
+                        policy.x: batch.si,
+                        ac: batch.a,
+                        adv: batch.adv,
+                        r: batch.r,
+                        policy.state_in[0]: batch.features[0],
+                        policy.state_in[1]: batch.features[1]
+                    }
 
-                # summ, fetched = sess.run([summary_op, grads], feed_dict=feed_dict)
-                gradients = sess.run(grads, feed_dict=feed_dict)
-                # if should_compute_summary:
-                # summary_writer.add_summary(tf.Summary.FromString(fetched[0]), fetched[-1])
-                # summary_writer.add_summary(tf.Summary.FromString(summ))
-                # summary_writer.flush()
+                    # summ, fetched = sess.run([summary_op, grads], feed_dict=feed_dict)
+                    gradients = sess.run(grads, feed_dict=feed_dict)
+                    # if should_compute_summary:
+                    # summary_writer.add_summary(tf.Summary.FromString(fetched[0]), fetched[-1])
+                    # summary_writer.add_summary(tf.Summary.FromString(summ))
+                    # summary_writer.flush()
 
-                fetched = Fetched(worker_id=worker_id,
-                                  terminal=rollout.terminal,
-                                  num_local_steps=config.num_local_steps,
-                                  grads=gradients,
-                                  rewards=[])
+                    worker.push_result(task_id, Fetched(
+                        worker_id=worker_id,
+                        grads=gradients,
+                        terminal=rollout.terminal,
+                        ep_return=None,
+                        ep_length=None,
+                        eval_return=None,
+                        eval_length=None
+                    ))
 
-                worker.push_result(task_id, fetched)
+                    p_rollout = next(rollout_provider)
+                    rollout.extend(p_rollout)
 
-                p_rollout = next(rollout_provider)
-                rollout.extend(p_rollout)
-
-            # full rollout
-            fetched = Fetched(worker_id=worker_id,
-                              terminal=rollout.terminal,
-                              num_local_steps=config.num_local_steps,
-                              grads=[],
-                              rewards=rollout.rewards)
-
-            worker.push_result(task_id, fetched)
+                # full rollout
+                worker.push_result(task_id, Fetched(
+                    worker_id=worker_id,
+                    grads=None,
+                    terminal=rollout.terminal,
+                    ep_return=np.sum(rollout.rewards),
+                    ep_length=len(rollout.rewards),
+                    eval_return=None,
+                    eval_length=None
+                ))

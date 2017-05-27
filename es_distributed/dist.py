@@ -76,15 +76,14 @@ class MasterClient:
         self.master_redis.set(EXP_KEY, serialize(exp))   # storing the experiment
         logger.info('[master] Declared experiment {}'.format(pformat(exp)))
 
-    def declare_task(self, task_data):   # pass data and task to new worker?
+    def declare_task(self, task_data):
         task_id = self.task_counter
         self.task_counter += 1
 
-        # send serialized task data to worker?
         serialized_task_data = serialize(task_data)
         (self.master_redis.pipeline()
          .mset({TASK_ID_KEY: task_id, TASK_DATA_KEY: serialized_task_data})
-         .publish(TASK_CHANNEL, serialize((task_id, serialized_task_data)))   # publish and TASK_CHANNEL?
+         .publish(TASK_CHANNEL, serialize((task_id, serialized_task_data)))
          .execute())   # TODO: can we avoid transferring task data twice and serializing so much?
         logger.debug('[master] Declared task {}'.format(task_id))
         return task_id
