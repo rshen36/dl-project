@@ -347,15 +347,14 @@ def run_master(master_redis_cfg, log_dir, exp):
                     episodes_so_far += 1
                     # timesteps_so_far += config.num_local_steps  # technically wrong
                 else:
-                    # TODO: eval iterations
                     if f.eval_length is not None:
                         # This was an eval job
                         episodes_so_far += 1
-                        timesteps_so_far += result.eval_length
+                        timesteps_so_far += f.eval_length
                         # Store the result only for the current task
                         if task_id == curr_task_id:
-                            eval_rets.append(result.eval_return)
-                            eval_lens.append(result.eval_length)
+                            eval_rets.append(f.eval_return)
+                            eval_lens.append(f.eval_length)
                     else:
                         # Update counts
                         updates_so_far += 1
