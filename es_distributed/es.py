@@ -225,8 +225,6 @@ def run_master(master_redis_cfg, log_dir, exp):
             while num_episodes_popped < config.episodes_per_batch or num_timesteps_popped < config.timesteps_per_batch:
                 # Wait for a result
                 task_id, result = master.pop_result()
-                if isinstance(result, Fetched):  # TODO: figure out better way to do this
-                    continue
                 assert isinstance(task_id, int) and isinstance(result, Result)
                 assert (result.eval_return is None) == (result.eval_length is None)
                 worker_ids.append(result.worker_id)
@@ -335,8 +333,6 @@ def run_master(master_redis_cfg, log_dir, exp):
             while num_episodes_popped < eps_per_batch or num_timesteps_popped < tsteps_per_batch:
                 # Wait for a result
                 task_id, f = master.pop_result()
-                if isinstance(f, Result):  # TODO: figure out better way to do this
-                    continue
                 assert isinstance(task_id, int) and isinstance(f, Fetched)
                 worker_ids.append(f.worker_id)
                 if f.terminal:  # full rollout
@@ -552,17 +548,14 @@ def run_worker(relay_redis_cfg, noise, min_task_runtime=1.):  # what should min_
                 eval_return = eval_rews.sum()
                 logger.info('Eval rewards: {}'.format(eval_rews))
                 logger.info('Eval result: task={} return={:3f} length={}'.format(task_id, eval_return, eval_length))
-                worker.push_result(task_id, Result(
+                worker.push_result(task_id, Fetched(
                     worker_id=worker_id,
-                    noise_inds_n=None,
-                    returns_n2=None,
-                    signreturns_n2=None,
-                    lengths_n2=None,
+                    grads=None,
+                    terminal=None,
+                    ep_return=None,
+                    ep_length=None,
                     eval_return=eval_return,
-                    eval_length=eval_length,
-                    ob_sum=None,
-                    ob_sumsq=None,
-                    ob_count=None
+                    eval_length=eval_length
                 ))
             else:
                 # TODO: should also do ob_stat update with A3C?
