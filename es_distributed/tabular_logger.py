@@ -30,7 +30,7 @@ class TbWriter(object):
         self.step = 1  # Start at 1, because EvWriter automatically generates an object with step=0 ?
         self.evwriter = pywrap_tensorflow.EventsWriter(compat.as_bytes(os.path.join(dir, prefix)))
     def write_values(self, key2val):
-        summary = tf.Summary(value=[tf.Summary.Value(tag="global/{}".format(k), simple_value=float(v))
+        summary = tf.Summary(value=[tf.Summary.Value(tag="{}".format(k), simple_value=float(v))
             for (k, v) in key2val.items()])
         event = event_pb2.Event(wall_time=time.time(), summary=summary)   # ???
         event.step = self.step  # is there any reason why you'd want to specify the step?

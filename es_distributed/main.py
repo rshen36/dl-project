@@ -30,10 +30,10 @@ def cli():
         stream=sys.stderr)
 
 
-# @cli.command()
-# @click.option('--exp_file')
-# @click.option('--master_socket_path', required=True)
-# @click.option('--log_dir')
+@cli.command()
+@click.option('--exp_file')
+@click.option('--master_socket_path', required=True)
+@click.option('--log_dir')
 def master(exp_file, master_socket_path, log_dir):
     # Start the master
     with open(exp_file, 'r') as f:
@@ -47,7 +47,8 @@ def master(exp_file, master_socket_path, log_dir):
 # @click.option('--master_socket_path', required=True)
 # @click.option('--relay_socket_path', required=True)
 # @click.option('--num_workers', type=int, default=0)
-def workers(master_socket_path, relay_socket_path, num_workers):
+# @click.option('--log_dir')
+def workers(master_socket_path, relay_socket_path, num_workers, log_dir):
     # Start the relay
     master_redis_cfg = {'unix_socket_path': master_socket_path}
     relay_redis_cfg = {'unix_socket_path': relay_socket_path}
@@ -56,11 +57,12 @@ def workers(master_socket_path, relay_socket_path, num_workers):
         return
     # Start the workers
     noise = SharedNoiseTable()   # Workers share the same noise
+    log_dir = os.path.expanduser(log_dir) if log_dir else '/tmp/es_master_{}'.format(os.getpid())
     num_workers = num_workers if num_workers else multiprocessing.cpu_count()
     logging.info('Spawning {} workers'.format(num_workers))
     for _ in range(num_workers):
         if os.fork() == 0:
-            run_worker(relay_redis_cfg, noise=noise)
+            run_worker(relay_redis_cfg, noise=noise, log_dir=log_dir)
             return
     os.wait()
 

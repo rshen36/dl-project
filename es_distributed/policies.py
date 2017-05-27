@@ -232,7 +232,6 @@ class GoPolicy(Policy):
     #def initialize_from(self, filename, ob_stat=None):
 
 
-# TODO: make consistent with es code
 class PartialRollout(object):
     """
     a piece of a complete rollout. We run our agent, and process its experience
@@ -316,7 +315,7 @@ class AtariPolicy(Policy):
                 time_major=False)
             lstm_c, lstm_h = lstm_state
             x = tf.reshape(lstm_outputs, [-1, self.lstm_size])
-            self.logits = U.dense(x, len(self.ac_space), 'action', U.normc_initializer(0.01))
+            self.logits = U.dense(x, self.ac_space.n, 'action', U.normc_initializer(0.01))
             self.ac_probs = tf.nn.softmax(self.logits)
             self.vf = tf.reshape(U.dense(x, 1, 'value', U.normc_initializer(1.0)), [-1])  # only for A3C
             self.state_out = [lstm_c[:1, :], lstm_h[:1, :]]
@@ -329,11 +328,10 @@ class AtariPolicy(Policy):
 
     def act(self, ob, c0, h0, random_stream=None):
         sess = U.get_session()
-        a, c1, h1 = sess.run([self.ac_probs, self.vf] + self.state_out,
+        return sess.run([self.ac_probs, self.vf] + self.state_out,
                              {self.x: [ob], self.state_in[0]: c0, self.state_in[1]: h0})
         # if random_stream is not None and self.ac_noise_std != 0:  # only use if using one-hot and argmax
         #     a += random_stream.randn(*a.shape) * self.ac_noise_std
-        return a, c1, h1   # softmax vector?
 
     def value(self, ob, c, h):
         sess = U.get_session()
@@ -371,29 +369,28 @@ class AtariPolicy(Policy):
         return rews, t
 
     # TODO: make consistent with es code
-    def partial_rollout(self, env, num_local_steps, render=False, random_stream=False):
-        # summary writer? save_obs?
-        last_state = env.reset()
-        last_features = self.get_initial_features()
+    def env_runner(self, env, num_local_steps=20, render=False, random_stream=False):
+        # summary writer?
         length = 0
         rewards = 0
-
+        last_state = env.reset()
+        last_features = self.get_initial_features()
         while True:
             terminal_end = False
-            p_rollout = PartialRollout()
+            rollout = PartialRollout()
 
             for _ in range(num_local_steps):
                 fetched = self.act(last_state, *last_features, random_stream=random_stream)
                 action, value_, features = fetched[0], fetched[1], fetched[2:]
                 action = action.squeeze()
                 # action = action.argmax()  # only want the argmax when using one-hot and random_stream
-                action = np.random.choice(np.arange(len(action)), p=action)  # when using action probs
-                state, reward, terminal, info = env.step(action)
+                ac = np.random.choice(np.arange(len(action)), p=action)  # when using action probs
+                state, reward, terminal, info = env.step(ac)
                 if render:
                     env.render()
 
                 # collect the experience
-                p_rollout.add(last_state, action, reward, value_, terminal, last_features)
+                rollout.add(last_state, action, reward, value_, terminal, last_features)
                 length += 1
                 rewards += reward
 
@@ -402,18 +399,22 @@ class AtariPolicy(Policy):
 
                 # if info:  # for tf summary writing, if want to implement
 
-                if terminal:  # want to implement timestep_limit? will env always have?
+                timestep_limit = env.spec.tags.get('wrapper_config.TimeLimit.max_episode_steps')
+                if terminal or length >= timestep_limit:
                     terminal_end = True
+                    if length >= timestep_limit or not env.metadata.get('semantics.autoreset'):
+                        last_state = env.reset()
                     last_features = self.get_initial_features()
+                    # print("Episode finished. Sum of rewards: %d. Length: %d" % (rewards, length))
                     length = 0
                     rewards = 0
                     break
 
             if not terminal_end:
-                p_rollout.r = self.value(last_state, *last_features)
+                rollout.r = self.value(last_state, *last_features)
 
             # once we have enough experience, yield it
-            yield p_rollout
+            yield rollout
 
     @property
     def needs_ob_stat(self):   # necessary?

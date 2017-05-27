@@ -213,7 +213,7 @@ def intprod(x):
 
 def flatgrad(loss, var_list):
     grads = tf.gradients(loss, var_list)
-    return tf.concat(0, [tf.reshape(grad, [numel(v)]) for (v, grad) in zip(var_list, grads)])
+    return tf.concat([tf.reshape(grad, [numel(v)]) for (v, grad) in zip(var_list, grads)], 0)
 
 
 class SetFromFlat(object):
