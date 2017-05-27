@@ -393,8 +393,6 @@ def run_master(master_redis_cfg, log_dir, exp):
             tlogger.record_tabular("a3c/EvalEpRewMean", np.nan if not eval_rets else np.mean(eval_rets))
             tlogger.record_tabular("a3c/EvalEpRewStd", np.nan if not eval_rets else np.std(eval_rets))
             tlogger.record_tabular("a3c/EvalEpLenMean", np.nan if not eval_rets else np.mean(eval_lens))
-            tlogger.record_tabular("a3c/EvalPopRank", np.nan if not eval_rets else (
-                np.searchsorted(np.sort(returns_n2.ravel()), eval_rets).mean() / returns_n2.size))  # ???
             tlogger.record_tabular("a3c/EvalEpCount", len(eval_rets))
 
             tlogger.record_tabular("a3c/Norm", float(np.square(policy.get_trainable_flat()).sum()))
