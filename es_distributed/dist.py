@@ -112,7 +112,7 @@ class RelayClient:
         self._declare_task_local(*retry_get(self.master_redis, (TASK_ID_KEY, TASK_DATA_KEY)))
 
         # Start subscribing to tasks
-        p = self.master_redis.pubsub()   # TODO: study Redis publishing/subscribing messsaging paradigm
+        p = self.master_redis.pubsub()
         p.subscribe(**{TASK_CHANNEL: lambda msg: self._declare_task_local(*deserialize(msg['data']))})
         p.run_in_thread(sleep_time=0.001)
 
@@ -149,7 +149,6 @@ class WorkerClient:
         logger.info('[worker] Experiment: {}'.format(exp))
         return exp
 
-    # TODO: study redis pipelines
     def get_current_task(self):
         with self.local_redis.pipeline() as pipe:
             while True:

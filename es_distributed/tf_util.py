@@ -77,7 +77,6 @@ def categorical_sample(logits, d):
 def get_session():
     return tf.get_default_session()
 
-# TODO: study how tf sessions work, particularly the config pmrs
 def single_threaded_session():
     tf_config = tf.ConfigProto(
         inter_op_parallelism_threads=1,
@@ -98,7 +97,6 @@ def set_value(v, val):
     get_session().run(v.assign(val))
 
 def load_state(fname):
-    # TODO: study how tf.train.Saver works
     saver = tf.train.Saver()
     saver.restore(get_session(), fname)
 

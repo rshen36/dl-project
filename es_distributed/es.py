@@ -1,6 +1,5 @@
 # Modified from es.py from OpenAI's evolutionary-strategies-starter project
 # Also borrows concepts from Denny Britz's reinforcement-learning project
-import os
 import logging
 import time
 from collections import namedtuple
@@ -19,7 +18,7 @@ Config = namedtuple('Config', [
     'l2coeff', 'noise_stdev', 'episodes_per_batch', 'timesteps_per_batch',
     'calc_obstat_prob', 'eval_prob', 'snapshot_freq',
     'return_proc_mode', 'episode_cutoff_mode',
-    'es_a3c_prob', 'switch_freq', 'num_local_steps'
+    'es_a3c_prob', 'switch_freq', 'num_local_steps', 'one_hot'
 ])
 Task = namedtuple('Task', ['params', 'ob_mean', 'ob_std', 'a3c'])
 Result = namedtuple('Result', [
@@ -35,8 +34,6 @@ Fetched = namedtuple('Fetched', [
 ])
 Batch = namedtuple('Batch', ['si', 'a', 'adv', 'r', 'terminal', 'features'])
 # make separate es and a3c helper function files?
-# TODO: check a3c implementation against exact algorithm
-# need to implement global counter and t_max for a3c?
 
 
 class RunningStat(object):
@@ -432,12 +429,12 @@ def run_master(master_redis_cfg, log_dir, exp):
             es_a3c = rs.rand() < np.power(config.es_a3c_prob, curr_task_id)
 
 
-def rollout_and_update_ob_stat(policy, env, rs, task_ob_stat, calc_obstat_prob):
+def rollout_and_update_ob_stat(policy, env, rs, task_ob_stat, calc_obstat_prob, one_hot=True):
     if policy.needs_ob_stat and calc_obstat_prob != 0 and rs.rand() < calc_obstat_prob:   # why a probability?
-        rollout_rews, rollout_len, obs = policy.rollout(env, save_obs=True, random_stream=rs)
+        rollout_rews, rollout_len, obs = policy.rollout(env, save_obs=True, random_stream=rs, one_hot=one_hot)
         task_ob_stat.increment(obs.sum(axis=0), np.square(obs).sum(axis=0), len(obs))
     else:
-        rollout_rews, rollout_len = policy.rollout(env, random_stream=rs)
+        rollout_rews, rollout_len = policy.rollout(env, random_stream=rs, one_hot=one_hot)
     return rollout_rews, rollout_len
 
 
@@ -493,7 +490,7 @@ def run_worker(relay_redis_cfg, noise, min_task_runtime=1.):  # what should min_
             if rs.rand() < config.eval_prob:
                 # Evaluation: noiseless weights and noiseless actions
                 policy.set_trainable_flat(task_data.params)
-                eval_rews, eval_length = policy.rollout(env)
+                eval_rews, eval_length = policy.rollout(env, one_hot=config.one_hot)
                 eval_return = eval_rews.sum()
                 logger.info('Eval rewards: {}'.format(eval_rews))
                 logger.info('Eval result: task={} return={:3f} length={}'.format(task_id, eval_return, eval_length))
@@ -549,7 +546,7 @@ def run_worker(relay_redis_cfg, noise, min_task_runtime=1.):  # what should min_
             if rs.rand() < config.eval_prob * 10:  # TODO: do this better
                 # Evaluation: noiseless weights and noiseless actions
                 policy.set_trainable_flat(task_data.params)
-                eval_rews, eval_length = policy.rollout(env)
+                eval_rews, eval_length = policy.rollout(env, one_hot=config.one_hot)
                 eval_return = eval_rews.sum()
                 logger.info('Eval rewards: {}'.format(eval_rews))
                 logger.info('Eval result: task={} return={:3f} length={}'.format(task_id, eval_return, eval_length))
@@ -566,7 +563,8 @@ def run_worker(relay_redis_cfg, noise, min_task_runtime=1.):  # what should min_
                 # TODO: should also do ob_stat update with A3C?
                 policy.set_trainable_flat(task_data.params)
 
-                rollout_provider = policy.env_runner(env, num_local_steps=config.num_local_steps)
+                rollout_provider = policy.env_runner(env, num_local_steps=config.num_local_steps,
+                                                     one_hot=config.one_hot)
                 rollout = p_rollout = next(rollout_provider)
 
                 # TODO: figure out better way to do this

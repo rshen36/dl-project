@@ -18,7 +18,7 @@ ERROR = 40
 
 DISABLED = 50
 
-# TODO: figure out why this was necessary at all
+
 class TbWriter(object):
     """
     Based on SummaryWriter, but changed to allow for a different prefix

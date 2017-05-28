@@ -11,7 +11,8 @@
     "episode_cutoff_mode": "env_default",
     "es_a3c_prob": 1.00,
     "switch_freq": 10,
-    "num_local_steps": 20
+    "num_local_steps": 20,
+    "one_hot": 1
   },
   "env_id": "Breakout-v0",
   "exp_prefix": "breakout",

@@ -7,7 +7,7 @@ try:
 except ImportError:
     import pickle
 
-import h5py   # TODO: study HDF5 / h5py
+import h5py
 import numpy as np
 import tensorflow as tf
 import tensorflow.contrib.rnn as rnn
@@ -121,6 +121,7 @@ class Policy:
 #     return tf.argmax(scores_nab, 2)   # 0 ... num_bins-1
 
 
+# NOT UPDATED: DON'T USE
 class GoPolicy(Policy):
     # ob_space = Box(3, 19, 19)
     # ac_space = Discrete(363)   19*19 + 2
@@ -316,28 +317,35 @@ class AtariPolicy(Policy):
             lstm_c, lstm_h = lstm_state
             x = tf.reshape(lstm_outputs, [-1, self.lstm_size])
             self.logits = U.dense(x, self.ac_space.n, 'action', U.normc_initializer(0.01))
-            # self.ac_probs = tf.nn.softmax(self.logits)
+            self.ac_probs = tf.nn.softmax(self.logits)[0, :]
+            self.sample = U.categorical_sample(self.logits, self.ac_space.n)[0, :]
             self.vf = tf.reshape(U.dense(x, 1, 'value', U.normc_initializer(1.0)), [-1])  # only for A3C
             self.state_out = [lstm_c[:1, :], lstm_h[:1, :]]
-            self.sample = U.categorical_sample(self.logits, self.ac_space.n)[0, :]
 
         return scope
 
     def get_initial_features(self):
         return self.state_init
 
-    def act(self, ob, c, h, random_stream=None):
+    def act(self, ob, c0, h0, random_stream=None, one_hot=True):
         sess = U.get_session()
-        return sess.run([self.sample, self.vf] + self.state_out,
-                             {self.x: [ob], self.state_in[0]: c, self.state_in[1]: h})
-        # if random_stream is not None and self.ac_noise_std != 0:  # only use if using one-hot and argmax
-        #     a += random_stream.randn(*a.shape) * self.ac_noise_std
+        if one_hot:
+            a, v_, c1, h1 = sess.run([self.sample, self.vf] + self.state_out,
+                                 {self.x: [ob], self.state_in[0]: c0, self.state_in[1]: h0})
+            # only use if using one-hot and argmax  <-- would this even do anything in this case?
+            if random_stream is not None and self.ac_noise_std != 0:
+                a += random_stream.randn(*a.shape) * self.ac_noise_std
+            return a, v_, c1, h1
+        else: # softmax
+            # don't want random_stream with softmax
+            return sess.run([self.ac_probs, self.vf] + self.state_out,
+                                 {self.x: [ob], self.state_in[0]: c0, self.state_in[1]: h0})
 
     def value(self, ob, c, h):
         sess = U.get_session()
         return sess.run(self.vf, {self.x: [ob], self.state_in[0]: c, self.state_in[1]: h})[0]
 
-    def rollout(self, env, render=False, save_obs=False, random_stream=None):  # for ES
+    def rollout(self, env, render=False, save_obs=False, random_stream=None, one_hot=True):  # for ES
         """
         If random_stream is provided, the rollout will take noisy actions with noise drawn from that stream.
         Otherwise, no action noise will be added.
@@ -349,13 +357,14 @@ class AtariPolicy(Policy):
         last_ob = env.reset()
         last_features = self.get_initial_features()
         while True:
-            fetched = self.act(last_ob, *last_features, random_stream=random_stream)
+            fetched = self.act(last_ob, *last_features, random_stream=random_stream, one_hot=one_hot)
             ac, last_features = fetched[0], fetched[2:]
-            ac = ac.squeeze()
             if save_obs:
                 obs.append(last_ob)
-            # ac = ac.argmax()  # want argmax when using one-hot and random_stream
-            ac = np.random.choice(np.arange(len(ac)), p=ac)  # when using action probs
+            if one_hot:
+                ac = ac.argmax()  # want argmax when using one-hot and random_stream
+            else:
+                ac = np.random.choice(np.arange(len(ac)), p=ac)  # when using action probs
             last_ob, rew, done, _ = env.step(ac)
             rews.append(rew)
             t += 1
@@ -368,9 +377,7 @@ class AtariPolicy(Policy):
             return rews, t, np.array(obs)
         return rews, t
 
-    # TODO: make consistent with es code
-    def env_runner(self, env, num_local_steps=20, render=False, random_stream=False):
-        # summary writer?
+    def env_runner(self, env, num_local_steps=20, render=False, random_stream=None, one_hot=True):
         length = 0
         rewards = 0
         last_state = env.reset()
@@ -380,12 +387,13 @@ class AtariPolicy(Policy):
             rollout = PartialRollout()
 
             for _ in range(num_local_steps):
-                fetched = self.act(last_state, *last_features, random_stream=random_stream)
+                fetched = self.act(last_state, *last_features, random_stream=random_stream, one_hot=one_hot)
                 action, value_, features = fetched[0], fetched[1], fetched[2:]
-                # action = action.squeeze()  # necessary with one-hot as well?
-                # action = action.argmax()  # only want the argmax when using one-hot (and random_stream)
-                # ac = np.random.choice(np.arange(len(action)), p=action)  # when using action probs
-                state, reward, terminal, info = env.step(action.argmax())
+                if one_hot:
+                    ac = action.argmax()  # want argmax when using one-hot and random_stream
+                else:
+                    ac = np.random.choice(np.arange(len(action)), p=action)  # when using action probs
+                state, reward, terminal, info = env.step(ac)
                 if render:
                     env.render()
 
