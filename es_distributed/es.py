@@ -198,7 +198,7 @@ def run_master(master_redis_cfg, log_dir, exp):
     #     logger.info('Initializing weights from {}'.format(exp['policy']['init_from']))
     #     policy.initialize_from(exp['policy']['init_from'], ob_stat)
 
-    updates_so_far = 0  # for a3c  <-- probably wrong way to do it
+    updates_so_far = 0  # for a3c  TODO: better way to do this
     episodes_so_far = 0
     timesteps_so_far = 0
     tstart = time.time()
@@ -351,6 +351,7 @@ def run_master(master_redis_cfg, log_dir, exp):
                         num_episodes_popped += 1
                         episodes_so_far += 1
 
+                        # Store the result only for the current task
                         if task_id == curr_task_id:
                             returns.append(f.ep_return)
                             lengths.append(f.ep_length)
@@ -358,7 +359,7 @@ def run_master(master_redis_cfg, log_dir, exp):
                     # Update counts
                     updates_so_far += 1
                     timesteps_so_far += f.ep_length
-                    # Store results only for current tasks
+                    # Store the result only for the current task
                     if task_id == curr_task_id:
                         num_updates_popped += 1
                         num_timesteps_popped += f.ep_length
@@ -419,11 +420,10 @@ def run_master(master_redis_cfg, log_dir, exp):
         # save a snapshot of the policy
         if config.snapshot_freq != 0 and curr_task_id % config.snapshot_freq == 0:
             import os.path as osp
-            # filename = osp.join(tlogger.get_dir(), 'snapshot_iter{:05d}_rew{}.h5'.format(
-            #     curr_task_id,
-            #     np.nan if not eval_rets else int(np.mean(eval_rets))
-            # ))
-            filename = osp.join(tlogger.get_dir(), 'snapshot_iter{:05d}.h5'.format(curr_task_id))
+            filename = osp.join(tlogger.get_dir(), 'snapshot_iter{:05d}_rew{}.h5'.format(
+                curr_task_id,
+                np.nan if not eval_rets else int(np.mean(eval_rets))
+            ))
             policy.save(filename)
             tlogger.log('Saved snapshot {}'.format(filename))
 
