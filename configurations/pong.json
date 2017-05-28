@@ -9,9 +9,9 @@
     "timesteps_per_batch": 10000,
     "return_proc_mode": "centered_rank",
     "episode_cutoff_mode": "env_default",
-    "es_a3c_prob": 0.99,
-    "switch_freq": 5,
-    "num_local_steps": 20
+    "es_a3c_prob": 1.00,
+    "switch_freq": 10,
+    "num_local_steps": 100
   },
   "env_id": "Pong-v0",
   "exp_prefix": "pong",
