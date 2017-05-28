@@ -29,7 +29,7 @@ Result = namedtuple('Result', [
     'ob_sum', 'ob_sumsq', 'ob_count'
 ])
 Fetched = namedtuple('Fetched', [
-    'worker_id', 'grads',
+    'worker_id', 'params',
     'terminal', 'ep_return', 'ep_length',
     'eval_return', 'eval_length'
 ])
@@ -328,52 +328,54 @@ def run_master(master_redis_cfg, log_dir, exp):
             num_episodes_popped, num_updates_skipped, num_updates_popped, num_timesteps_popped = 0, 0, 0, 0
             # ob_count_this_batch = 0
 
-            eps_per_batch = config.episodes_per_batch / 20
+            ups_per_batch = config.episodes_per_batch / 20
             tsteps_per_batch = config.timesteps_per_batch / 20
-            while num_episodes_popped < eps_per_batch or num_timesteps_popped < tsteps_per_batch:
+            # while num_episodes_popped < eps_per_batch or num_timesteps_popped < tsteps_per_batch:
+            while num_updates_popped < ups_per_batch or num_timesteps_popped < tsteps_per_batch:
                 # Wait for a result
                 task_id, f = master.pop_result()
                 assert isinstance(task_id, int) and isinstance(f, Fetched)
                 worker_ids.append(f.worker_id)
-                if f.terminal:  # full rollout
-                    # additional gradient update on entire rollout?
-                    # would it ever be an issue here of task != curr_task?
-                    # if task_id == curr_task_id:
-                    returns.append(f.ep_return)
-                    lengths.append(f.ep_length)
+
+                if f.eval_length is not None:
+                    # This was an eval job
+                    episodes_so_far += 1
+                    timesteps_so_far += f.eval_length
+                    # Store the result only for the current task
+                    if task_id == curr_task_id:
+                        eval_rets.append(f.eval_return)
+                        eval_lens.append(f.eval_length)
+                else:
+                    if f.terminal:  # full rollout
+                        # Update counts
+                        num_episodes_popped += 1
+                        episodes_so_far += 1
+
+                        if task_id == curr_task_id:
+                            returns.append(f.ep_return)
+                            lengths.append(f.ep_length)
 
                     # Update counts
-                    num_episodes_popped += 1
-                    episodes_so_far += 1
-                    # timesteps_so_far += config.num_local_steps  # technically wrong
-                else:
-                    if f.eval_length is not None:
-                        # This was an eval job
-                        episodes_so_far += 1
-                        timesteps_so_far += f.eval_length
-                        # Store the result only for the current task
-                        if task_id == curr_task_id:
-                            eval_rets.append(f.eval_return)
-                            eval_lens.append(f.eval_length)
+                    updates_so_far += 1
+                    timesteps_so_far += f.ep_length
+                    # Store results only for current tasks
+                    if task_id == curr_task_id:
+                        num_updates_popped += 1
+                        num_timesteps_popped += f.ep_length
+                        # Update ob stats
+                        # if policy.needs_ob_stat and result.ob_count > 0:
+                        #     ob_stat.increment(result.ob_sum, result.ob_sumsq, result.ob_count)
+                        #     ob_count_this_batch += result.ob_count
                     else:
-                        # Update counts
-                        updates_so_far += 1
-                        timesteps_so_far += config.num_local_steps  # TODO: improve on this
-                        # Store results only for current tasks
-                        if task_id == curr_task_id:
-                            num_updates_popped += 1
-                            num_timesteps_popped += config.num_local_steps
-                            # Update ob stats
-                            # if policy.needs_ob_stat and result.ob_count > 0:
-                            #     ob_stat.increment(result.ob_sum, result.ob_sumsq, result.ob_count)
-                            #     ob_count_this_batch += result.ob_count
-                        else:
-                            num_updates_skipped += 1
+                        num_updates_skipped += 1
 
-                        # gradient updates for every partial rollout?
-                        g = f.grads
-                        assert g.shape == (policy.num_params,) and g.dtype == np.float32
-                        update_ratio = optimizer.update(-g + config.l2coeff * theta)
+                    # gradient updates for every partial rollout?
+                    # g = f.grads
+                    # assert g.shape == (policy.num_params,) and g.dtype == np.float32
+                    # update_ratio = optimizer.update(-g + config.l2coeff * theta)
+
+                    # asynchronous updates from each worker? too many overwrites? better way?
+                    policy.set_trainable_flat(f.params)
 
             # Compute skip fraction
             frac_updates_skipped = num_updates_skipped / (num_updates_skipped + num_updates_popped)
@@ -441,15 +443,41 @@ def rollout_and_update_ob_stat(policy, env, rs, task_ob_stat, calc_obstat_prob):
 
 def run_worker(relay_redis_cfg, noise, min_task_runtime=1.):  # what should min_task_runtime default be?
     logger.info('run_worker: {}'.format(locals()))
+    from .optimizers import SGD, Adam
     assert isinstance(noise, SharedNoiseTable)
     worker = WorkerClient(relay_redis_cfg)
     exp = worker.get_experiment()
     config, env, sess, policy = setup(exp, single_threaded=True)
+    optimizer = {'sgd': SGD, 'adam': Adam}[exp['optimizer']['type']](policy, **exp['optimizer']['args'])
     rs = np.random.RandomState()
     worker_id = rs.randint(2 ** 31)   # don't have to order worker_ids and guarantee no two same id?
-    # summary_writer = tf.summary.FileWriter(log_dir + "_%d" % worker_id)
 
     assert policy.needs_ob_stat == (config.calc_obstat_prob != 0)
+
+    ac = tf.placeholder(tf.float32, [None, env.action_space.n], name='ac')
+    adv = tf.placeholder(tf.float32, [None], name='adv')
+    r = tf.placeholder(tf.float32, [None], name='r')
+
+    log_prob_tf = tf.nn.log_softmax(policy.logits)
+    prob_tf = tf.nn.softmax(policy.logits)
+
+    # the "policy gradients" loss: its derivative is precisely the policy gradient
+    # notice that ac is a placeholder that is provided externally.
+    # adv will contain the advantages, as calculated in process_rollout
+    pi_loss = - tf.reduce_sum(tf.reduce_sum(log_prob_tf * ac, [1]) * adv)
+
+    vf_loss = 0.5 * tf.reduce_sum(tf.square(policy.vf - r))  # loss of value function
+    vf_loss = tf.cast(vf_loss, tf.float32)
+    entropy = - tf.reduce_sum(prob_tf * log_prob_tf)
+
+    bs = tf.to_float(tf.shape(policy.x)[0])  # batch size
+    loss = pi_loss + 0.5 * vf_loss - entropy * 0.01
+
+    # matters not inputting master variables?
+    grads = tf.gradients(loss, policy.trainable_variables)
+    grads, _ = tf.clip_by_global_norm(grads, 40.0)  # why 40.0?
+    grads = tf.concat([tf.reshape(grad, [U.numel(v)]) for (v, grad)
+                       in zip(policy.trainable_variables, grads)], 0)  # flatten gradients
 
     while True:
         # retrieve and check current task
@@ -518,7 +546,7 @@ def run_worker(relay_redis_cfg, noise, min_task_runtime=1.):  # what should min_
                     ob_count=task_ob_stat.count
                 ))
         else:  # A3C worker step
-            if rs.rand() < config.eval_prob * 10:
+            if rs.rand() < config.eval_prob * 10:  # TODO: do this better
                 # Evaluation: noiseless weights and noiseless actions
                 policy.set_trainable_flat(task_data.params)
                 eval_rews, eval_length = policy.rollout(env)
@@ -527,7 +555,7 @@ def run_worker(relay_redis_cfg, noise, min_task_runtime=1.):  # what should min_
                 logger.info('Eval result: task={} return={:3f} length={}'.format(task_id, eval_return, eval_length))
                 worker.push_result(task_id, Fetched(
                     worker_id=worker_id,
-                    grads=None,
+                    params=None,
                     terminal=None,
                     ep_return=None,
                     ep_length=None,
@@ -538,98 +566,36 @@ def run_worker(relay_redis_cfg, noise, min_task_runtime=1.):  # what should min_
                 # TODO: should also do ob_stat update with A3C?
                 policy.set_trainable_flat(task_data.params)
 
-                # TODO: set up local and global a3c steps
-                ac = tf.placeholder(tf.float32, [None, env.action_space.n], name='ac')
-                adv = tf.placeholder(tf.float32, [None], name='adv')
-                r = tf.placeholder(tf.float32, [None], name='r')
-
-                log_prob_tf = tf.nn.log_softmax(policy.logits)
-                prob_tf = tf.nn.softmax(policy.logits)
-
-                # the "policy gradients" loss: its derivative is precisely the policy gradient
-                # notice that ac is a placeholder that is provided externally.
-                # adv will contain the advantages, as calculated in process_rollout
-                pi_loss = - tf.reduce_sum(tf.reduce_sum(log_prob_tf * ac, [1]) * adv)
-
-                vf_loss = 0.5 * tf.reduce_sum(tf.square(policy.vf - r))  # loss of value function
-                vf_loss = tf.cast(vf_loss, tf.float32)
-                entropy = - tf.reduce_sum(prob_tf * log_prob_tf)
-
-                bs = tf.to_float(tf.shape(policy.x)[0])  # batch size
-                loss = pi_loss + 0.5 * vf_loss - entropy * 0.01
-
-                # matters not inputting master variables?
-                # too large to communicate without clipping
-                grads = tf.gradients(loss, policy.trainable_variables)
-                grads, _ = tf.clip_by_global_norm(grads, 40.0)  # why 40.0?
-                grads = tf.concat([tf.reshape(grad, [U.numel(v)]) for (v, grad)
-                                   in zip(policy.trainable_variables, grads)], 0)  # flatten gradients
-
-                # tf.summary.scalar("model/policy_loss", pi_loss / bs)
-                # tf.summary.scalar("model/value_loss", vf_loss / bs)
-                # tf.summary.scalar("model/entropy", entropy / bs)
-                # tf.summary.scalar("model/loss", loss / bs)
-                # tf.summary.image("model/state", policy.x)
-                # tf.summary.scalar("model/grad_global_norm", tf.global_norm(grads))
-                # tf.summary.scalar("model/var_global_norm", tf.global_norm(policy.trainable_variables))
-
                 rollout_provider = policy.env_runner(env, num_local_steps=config.num_local_steps)
                 rollout = p_rollout = next(rollout_provider)
 
-                # tf.summary.scalar("max_value", tf.reduce_max(policy.vf))
-                # tf.summary.scalar("min_value", tf.reduce_min(policy.vf))
-                # tf.summary.scalar("mean_value", tf.reduce_mean(policy.vf))
-                # tf.summary.scalar("reward_max", tf.reduce_max(rollout.rewards))
-                # tf.summary.scalar("reward_min", tf.reduce_min(rollout.rewards))
-                # tf.summary.scalar("reward_mean", tf.reduce_mean(rollout.rewards))
-                # tf.summary.histogram("reward_targets", rollout.rewards)
-                # tf.summary.histogram("values", policy.vf)
-                # summary_op = tf.summary.merge_all()
-
-                while not rollout.terminal:  # TODO: incorporate local and global steps
-                    # TODO: local and global steps per batch?
-                    # TODO: set gamma and lambda_ as hyperparameters
-                    batch = process_rollout(p_rollout, gamma=0.99, lambda_=1.0)
-
-                    # should_compute_summary =
-                    # if should_compute_summary:
-                    #     fetches = [summary_op, grads, global_step]
-                    # else:
-                    #     fetches = [grads, global_step]
-
-                    feed_dict = {
-                        policy.x: batch.si,
-                        ac: batch.a,
-                        adv: batch.adv,
-                        r: batch.r,
-                        policy.state_in[0]: batch.features[0],
-                        policy.state_in[1]: batch.features[1]
-                    }
-
-                    # summ, fetched = sess.run([summary_op, grads], feed_dict=feed_dict)
-                    gradients = sess.run(grads, feed_dict=feed_dict)
-                    # if should_compute_summary:
-                    # summary_writer.add_summary(tf.Summary.FromString(fetched[0]), fetched[-1])
-                    # summary_writer.add_summary(tf.Summary.FromString(summ))
-                    # summary_writer.flush()
-
-                    worker.push_result(task_id, Fetched(
-                        worker_id=worker_id,
-                        grads=gradients,
-                        terminal=rollout.terminal,
-                        ep_return=None,
-                        ep_length=None,
-                        eval_return=None,
-                        eval_length=None
-                    ))
-
+                # TODO: figure out better way to do this
+                while not rollout.terminal and (time.time() - task_tstart) < (min_task_runtime * 600):
                     p_rollout = next(rollout_provider)
                     rollout.extend(p_rollout)
 
-                # full rollout
+                # TODO: set gamma and lambda_ as hyperparameters
+                batch = process_rollout(rollout, gamma=0.99, lambda_=1.0)
+
+                feed_dict = {
+                    policy.x: batch.si,
+                    ac: batch.a,
+                    adv: batch.adv,
+                    r: batch.r,
+                    policy.state_in[0]: batch.features[0],
+                    policy.state_in[1]: batch.features[1]
+                }
+
+                # code god please let this change make my algorithm work
+                # this should reset the gradients before each step?
+                g = sess.run(grads, feed_dict=feed_dict)
+                assert g.shape == task_data.params.shape and g.dtype == np.float32
+                update_ratio = optimizer.update(-g + config.l2coeff * task_data.params)
+
+                theta_ = policy.get_trainable_flat()  # broadcast new parameters
                 worker.push_result(task_id, Fetched(
                     worker_id=worker_id,
-                    grads=None,
+                    params=theta_,
                     terminal=rollout.terminal,
                     ep_return=np.sum(rollout.rewards),
                     ep_length=len(rollout.rewards),

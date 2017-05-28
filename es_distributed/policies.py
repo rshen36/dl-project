@@ -316,20 +316,20 @@ class AtariPolicy(Policy):
             lstm_c, lstm_h = lstm_state
             x = tf.reshape(lstm_outputs, [-1, self.lstm_size])
             self.logits = U.dense(x, self.ac_space.n, 'action', U.normc_initializer(0.01))
-            self.ac_probs = tf.nn.softmax(self.logits)
+            # self.ac_probs = tf.nn.softmax(self.logits)
             self.vf = tf.reshape(U.dense(x, 1, 'value', U.normc_initializer(1.0)), [-1])  # only for A3C
             self.state_out = [lstm_c[:1, :], lstm_h[:1, :]]
-            # self.sample = U.categorical_sample(self.logits, self.ac_space.n)[0, :]
+            self.sample = U.categorical_sample(self.logits, self.ac_space.n)[0, :]
 
         return scope
 
     def get_initial_features(self):
         return self.state_init
 
-    def act(self, ob, c0, h0, random_stream=None):
+    def act(self, ob, c, h, random_stream=None):
         sess = U.get_session()
-        return sess.run([self.ac_probs, self.vf] + self.state_out,
-                             {self.x: [ob], self.state_in[0]: c0, self.state_in[1]: h0})
+        return sess.run([self.sample, self.vf] + self.state_out,
+                             {self.x: [ob], self.state_in[0]: c, self.state_in[1]: h})
         # if random_stream is not None and self.ac_noise_std != 0:  # only use if using one-hot and argmax
         #     a += random_stream.randn(*a.shape) * self.ac_noise_std
 
@@ -382,10 +382,10 @@ class AtariPolicy(Policy):
             for _ in range(num_local_steps):
                 fetched = self.act(last_state, *last_features, random_stream=random_stream)
                 action, value_, features = fetched[0], fetched[1], fetched[2:]
-                action = action.squeeze()
-                # action = action.argmax()  # only want the argmax when using one-hot and random_stream
-                ac = np.random.choice(np.arange(len(action)), p=action)  # when using action probs
-                state, reward, terminal, info = env.step(ac)
+                # action = action.squeeze()  # necessary with one-hot as well?
+                # action = action.argmax()  # only want the argmax when using one-hot (and random_stream)
+                # ac = np.random.choice(np.arange(len(action)), p=action)  # when using action probs
+                state, reward, terminal, info = env.step(action.argmax())
                 if render:
                     env.render()
 

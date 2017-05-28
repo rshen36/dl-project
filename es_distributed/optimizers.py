@@ -4,7 +4,7 @@ import numpy as np
 
 class Optimizer(object):
     def __init__(self, pi):
-        self.pi = pi   # parameters?
+        self.pi = pi   # policy
         self.dim = pi.num_params
         self.t = 0
 
