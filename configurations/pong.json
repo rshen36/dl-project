@@ -11,13 +11,13 @@
     "episode_cutoff_mode": "env_default",
     "es_a3c_prob": 1.00,
     "switch_freq": 10,
-    "num_local_steps": 100
+    "num_local_steps": 20
   },
   "env_id": "Pong-v0",
   "exp_prefix": "pong",
   "optimizer": {
     "args": {
-      "stepsize": 0.01
+      "stepsize": 0.0001
     },
     "type": "adam"
   },
