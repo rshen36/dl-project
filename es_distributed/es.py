@@ -451,26 +451,6 @@ def run_worker(relay_redis_cfg, noise, min_task_runtime=1.):  # what should min_
 
     assert policy.needs_ob_stat == (config.calc_obstat_prob != 0)
 
-    # TODO: set up local and global a3c steps
-    ac = tf.placeholder(tf.float32, [None, env.action_space.n], name='ac')
-    adv = tf.placeholder(tf.float32, [None], name='adv')
-    r = tf.placeholder(tf.float32, [None], name='r')
-
-    log_prob_tf = tf.nn.log_softmax(policy.logits)
-    prob_tf = tf.nn.softmax(policy.logits)
-
-    # the "policy gradients" loss: its derivative is precisely the policy gradient
-    # notice that ac is a placeholder that is provided externally.
-    # adv will contain the advantages, as calculated in process_rollout
-    pi_loss = - tf.reduce_sum(tf.reduce_sum(log_prob_tf * ac, [1]) * adv)
-
-    vf_loss = 0.5 * tf.reduce_sum(tf.square(policy.vf - r))  # loss of value function
-    vf_loss = tf.cast(vf_loss, tf.float32)
-    entropy = - tf.reduce_sum(prob_tf * log_prob_tf)
-
-    bs = tf.to_float(tf.shape(policy.x)[0])  # batch size
-    loss = pi_loss + 0.5 * vf_loss - entropy * 0.01
-
     while True:
         # retrieve and check current task
         task_id, task_data = worker.get_current_task()
@@ -557,6 +537,26 @@ def run_worker(relay_redis_cfg, noise, min_task_runtime=1.):  # what should min_
             else:
                 # TODO: should also do ob_stat update with A3C?
                 policy.set_trainable_flat(task_data.params)
+
+                # TODO: set up local and global a3c steps
+                ac = tf.placeholder(tf.float32, [None, env.action_space.n], name='ac')
+                adv = tf.placeholder(tf.float32, [None], name='adv')
+                r = tf.placeholder(tf.float32, [None], name='r')
+
+                log_prob_tf = tf.nn.log_softmax(policy.logits)
+                prob_tf = tf.nn.softmax(policy.logits)
+
+                # the "policy gradients" loss: its derivative is precisely the policy gradient
+                # notice that ac is a placeholder that is provided externally.
+                # adv will contain the advantages, as calculated in process_rollout
+                pi_loss = - tf.reduce_sum(tf.reduce_sum(log_prob_tf * ac, [1]) * adv)
+
+                vf_loss = 0.5 * tf.reduce_sum(tf.square(policy.vf - r))  # loss of value function
+                vf_loss = tf.cast(vf_loss, tf.float32)
+                entropy = - tf.reduce_sum(prob_tf * log_prob_tf)
+
+                bs = tf.to_float(tf.shape(policy.x)[0])  # batch size
+                loss = pi_loss + 0.5 * vf_loss - entropy * 0.01
 
                 # matters not inputting master variables?
                 # too large to communicate without clipping
