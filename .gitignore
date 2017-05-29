@@ -98,3 +98,4 @@ ENV/
 
 logs/*
 a3c_gym/logs/*
+*.DS_Store

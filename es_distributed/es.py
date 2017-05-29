@@ -30,7 +30,7 @@ Result = namedtuple('Result', [
 Fetched = namedtuple('Fetched', [
     'worker_id', 'params',
     'terminal', 'ep_return', 'ep_length',
-    'eval_return', 'eval_length'
+    'eval_return', 'eval_length', 'update_ratio'
 ])
 Batch = namedtuple('Batch', ['si', 'a', 'adv', 'r', 'terminal', 'features'])
 
@@ -321,12 +321,15 @@ def run_master(master_redis_cfg, log_dir, exp):
             tlogger.dump_tabular()
         else:  # A3C master step
             # Pop off results for the current task
-            eval_rets, eval_lens, returns, lengths, worker_ids = [], [], [], [], []
+            eval_rets, eval_lens, returns, lengths, update_ratios, worker_ids = [], [], [], [], [], []
             num_episodes_popped, num_updates_skipped, num_updates_popped, num_timesteps_popped = 0, 0, 0, 0
             # ob_count_this_batch = 0
 
+            # based on experimental results that es requires about 3-10 times as much data as a3c
+            eps_per_batch = config.episodes_per_batch / 10
+            tsteps_per_batch = config.timesteps_per_batch / 10
             # while num_updates_popped < ups_per_batch or num_timesteps_popped < tsteps_per_batch:
-            while num_episodes_popped < config.episodes_per_batch or num_timesteps_popped < config.timesteps_per_batch:
+            while num_episodes_popped < eps_per_batch or num_timesteps_popped < tsteps_per_batch:
                 # Wait for a result
                 task_id, f = master.pop_result()
                 assert isinstance(task_id, int) and isinstance(f, Fetched)
@@ -358,6 +361,7 @@ def run_master(master_redis_cfg, log_dir, exp):
                     if task_id == curr_task_id:
                         num_updates_popped += 1
                         num_timesteps_popped += f.ep_length
+                        update_ratios.append(f.update_ratio)
                         # Update ob stats
                         # if policy.needs_ob_stat and result.ob_count > 0:
                         #     ob_stat.increment(result.ob_sum, result.ob_sumsq, result.ob_count)
@@ -399,7 +403,8 @@ def run_master(master_redis_cfg, log_dir, exp):
 
             tlogger.record_tabular("a3c/Norm", float(np.square(policy.get_trainable_flat()).sum()))
             # tlogger.record_tabular("a3c/GradNorm", float(np.square(g).sum()))
-            # tlogger.record_tabular("a3c/UpdateRatio", float(update_ratio))
+            tlogger.record_tabular("a3c/UpdateRatioMean", np.mean(update_ratios))
+            tlogger.record_tabular("a3c/UpdateRatioStd", np.std(update_ratios))
 
             tlogger.record_tabular("a3c/UpdatesThisIter", num_updates_popped)
             tlogger.record_tabular("a3c/UpdatesSoFar", updates_so_far)
@@ -546,7 +551,7 @@ def run_worker(relay_redis_cfg, noise, min_task_runtime=1.):  # what should min_
                     ob_count=task_ob_stat.count
                 ))
         else:  # A3C worker step
-            if rs.rand() < config.eval_prob:
+            if rs.rand() < config.eval_prob * 3:
                 # Evaluation: noiseless weights and noiseless actions
                 policy.set_trainable_flat(task_data.params)
                 eval_rews, eval_length = policy.rollout(env, one_hot=config.one_hot)
@@ -560,7 +565,8 @@ def run_worker(relay_redis_cfg, noise, min_task_runtime=1.):  # what should min_
                     ep_return=None,
                     ep_length=None,
                     eval_return=eval_return,
-                    eval_length=eval_length
+                    eval_length=eval_length,
+                    update_ratio=None
                 ))
             else:
                 # Rollouts with noise
@@ -593,7 +599,7 @@ def run_worker(relay_redis_cfg, noise, min_task_runtime=1.):  # what should min_
                 assert g.shape == task_data.params.shape and g.dtype == np.float32
                 update_ratio = optimizer.update(-g + config.l2coeff * task_data.params)
 
-                theta_ = policy.get_trainable_flat()  # broadcast new parameters
+                theta_ = policy.get_trainable_flat()  # push new parameters
                 worker.push_result(task_id, Fetched(
                     worker_id=worker_id,
                     params=theta_,
@@ -601,5 +607,6 @@ def run_worker(relay_redis_cfg, noise, min_task_runtime=1.):  # what should min_
                     ep_return=np.sum(rollout.rewards),
                     ep_length=len(rollout.rewards),
                     eval_return=None,
-                    eval_length=None
+                    eval_length=None,
+                    update_ratio=update_ratio
                 ))

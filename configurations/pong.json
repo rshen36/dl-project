@@ -9,7 +9,7 @@
     "timesteps_per_batch": 10000,
     "return_proc_mode": "centered_rank",
     "episode_cutoff_mode": "env_default",
-    "es_a3c_prob": 0.99,
+    "es_a3c_prob": 1.00,
     "switch_freq": 10,
     "num_local_steps": 20,
     "one_hot": 1
@@ -18,7 +18,7 @@
   "exp_prefix": "pong",
   "optimizer": {
     "args": {
-      "stepsize": 0.01
+      "stepsize": 0.0001
     },
     "type": "adam"
   },
