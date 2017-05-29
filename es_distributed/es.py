@@ -10,6 +10,7 @@ import numpy as np
 
 from es_distributed import tf_util as U
 from .dist import MasterClient, WorkerClient
+from .envs import create_atari_env
 
 logging.basicConfig(filename='experiment.log', level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -164,7 +165,8 @@ def setup(exp, single_threaded):
     #limit = False  # TODO: limit action spaces for Pong and Breakout?
 
     config = Config(**exp['config'])
-    env = gym.make(exp['env_id'])
+    # env = gym.make(exp['env_id'])
+    env = create_atari_env(exp['env_id'])
     # if exp['env_id'] == "Pong-v0" or exp['env_id'] == "Breakout-v0":  # recommendation from Denny Britz
     #     limit = True
     sess = make_session(single_threaded=single_threaded)
