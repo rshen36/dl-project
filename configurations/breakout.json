@@ -1,6 +1,6 @@
 {
   "config": {
-    "calc_obstat_prob": 0.01,
+    "calc_obstat_prob": 0,
     "episodes_per_batch": 1000,
     "eval_prob": 0.03,
     "l2coeff": 0.005,

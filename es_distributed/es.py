@@ -10,7 +10,6 @@ import numpy as np
 
 from es_distributed import tf_util as U
 from .dist import MasterClient, WorkerClient
-from .envs import create_atari_env
 
 logging.basicConfig(filename='experiment.log', level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -34,7 +33,6 @@ Fetched = namedtuple('Fetched', [
     'eval_return', 'eval_length'
 ])
 Batch = namedtuple('Batch', ['si', 'a', 'adv', 'r', 'terminal', 'features'])
-# make separate es and a3c helper function files?
 
 
 class RunningStat(object):
@@ -162,16 +160,15 @@ def setup(exp, single_threaded):
     gym.undo_logger_setup()   # to allow for own logging
     from es_distributed import tf_util
     from es_distributed import policies
-    #limit = False  # TODO: limit action spaces for Pong and Breakout?
+    limit = False  # TODO: limit action spaces for Pong and Breakout?
 
     config = Config(**exp['config'])
-    # env = gym.make(exp['env_id'])
-    env = create_atari_env(exp['env_id'])
-    # if exp['env_id'] == "Pong-v0" or exp['env_id'] == "Breakout-v0":  # recommendation from Denny Britz
-    #     limit = True
+    env = gym.make(exp['env_id'])
+    if exp['env_id'] == "Pong-v0" or exp['env_id'] == "Breakout-v0":  # recommendation from Denny Britz
+        limit = True
     sess = make_session(single_threaded=single_threaded)
     policy = getattr(policies, exp['policy']['type'])(env.observation_space,
-                                                      env.action_space, **exp['policy']['args'])
+                                                      env.action_space, limit, **exp['policy']['args'])
     tf_util.initialize()
 
     return config, env, sess, policy
@@ -190,7 +187,8 @@ def run_master(master_redis_cfg, log_dir, exp):
     noise = SharedNoiseTable()
     rs = np.random.RandomState()
     ob_stat = RunningStat(
-        env.observation_space.shape,
+        # env.observation_space.shape,
+        policy.ob_space.shape,  # preprocessing
         eps=1e-2   # eps to prevent dividing by zero at the beginning when computing mean/stdev
     )
     # if 'init_from' in exp['policy']:
@@ -369,11 +367,6 @@ def run_master(master_redis_cfg, log_dir, exp):
                     else:
                         num_updates_skipped += 1
 
-                    # gradient updates for every partial rollout?
-                    # g = f.grads
-                    # assert g.shape == (policy.num_params,) and g.dtype == np.float32
-                    # update_ratio = optimizer.update(-g + config.l2coeff * theta)
-
                     # asynchronous updates from each worker? too many overwrites? better way?
                     policy.set_trainable_flat(f.params)
 
@@ -453,7 +446,8 @@ def run_worker(relay_redis_cfg, noise, min_task_runtime=1.):  # what should min_
 
     assert policy.needs_ob_stat == (config.calc_obstat_prob != 0)
 
-    ac = tf.placeholder(tf.float32, [None, env.action_space.n], name='ac')
+    # ac = tf.placeholder(tf.float32, [None, env.action_space.n], name='ac')
+    ac = tf.placeholder(tf.float32, [None, policy.ac_space.n], name='ac')
     adv = tf.placeholder(tf.float32, [None], name='adv')
     r = tf.placeholder(tf.float32, [None], name='r')
 
@@ -511,7 +505,8 @@ def run_worker(relay_redis_cfg, noise, min_task_runtime=1.):  # what should min_
             else:
                 # Rollouts with noise
                 noise_inds, returns, signreturns, lengths = [], [], [], []
-                task_ob_stat = RunningStat(env.observation_space.shape, eps=0.)   # eps=0 bc only incrementing
+                # task_ob_stat = RunningStat(env.observation_space.shape, eps=0.)   # eps=0 bc only incrementing
+                task_ob_stat = RunningStat(policy.ob_space.shape, eps=0.)  # eps=0 bc only incrementing
 
                 while not noise_inds or time.time() - task_tstart < min_task_runtime:
                     noise_idx = noise.sample_index(rs, policy.num_params)   # sampling indices for random noise values?
@@ -545,7 +540,7 @@ def run_worker(relay_redis_cfg, noise, min_task_runtime=1.):  # what should min_
                     ob_count=task_ob_stat.count
                 ))
         else:  # A3C worker step
-            if rs.rand() < config.eval_prob * 10:  # TODO: do this better
+            if rs.rand() < config.eval_prob * 5:  # TODO: do this better
                 # Evaluation: noiseless weights and noiseless actions
                 policy.set_trainable_flat(task_data.params)
                 eval_rews, eval_length = policy.rollout(env, one_hot=config.one_hot)
@@ -562,11 +557,12 @@ def run_worker(relay_redis_cfg, noise, min_task_runtime=1.):  # what should min_
                     eval_length=eval_length
                 ))
             else:
+                # Rollouts with noise
                 # TODO: should also do ob_stat update with A3C?
                 policy.set_trainable_flat(task_data.params)
 
                 rollout_provider = policy.env_runner(env, num_local_steps=config.num_local_steps,
-                                                     one_hot=config.one_hot)
+                                                     random_stream=rs, one_hot=config.one_hot)
                 rollout = p_rollout = next(rollout_provider)
 
                 # TODO: figure out better way to do this
@@ -586,7 +582,6 @@ def run_worker(relay_redis_cfg, noise, min_task_runtime=1.):  # what should min_
                     policy.state_in[1]: batch.features[1]
                 }
 
-                # code god please let this change make my algorithm work
                 # this should reset the gradients before each step?
                 g = sess.run(grads, feed_dict=feed_dict)
                 assert g.shape == task_data.params.shape and g.dtype == np.float32

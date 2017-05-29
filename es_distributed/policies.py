@@ -1,6 +1,7 @@
 # Modified from policies.py from OpenAI's evolutionary-strategies-starter project
 import logging
-from collections import namedtuple
+from gym.spaces.box import Box
+from gym.spaces.discrete import Discrete
 
 try:
     import cPickle as pickle
@@ -12,6 +13,7 @@ import numpy as np
 import tensorflow as tf
 import tensorflow.contrib.rnn as rnn
 
+from state_processor import StateProcessor
 from es_distributed import tf_util as U
 
 logging.basicConfig(filename='experiment.log', level=logging.INFO)
@@ -122,115 +124,115 @@ class Policy:
 
 
 # NOT UPDATED: DON'T USE
-class GoPolicy(Policy):
-    # ob_space = Box(3, 19, 19)
-    # ac_space = Discrete(363)   19*19 + 2
-    def _initialize(self, ob_space, ac_space, ac_noise_std, nonlin_type, hidden_dims, lstm_size):
-        self.ac_space = ac_space
-        self.ac_noise_std = ac_noise_std
-        self.hidden_dims = hidden_dims
-        self.lstm_size = lstm_size
-
-        self.nonlin = {'tanh': tf.tanh, 'relu': tf.nn.relu, 'lrelu': U.lrelu, 'elu': tf.nn.elu}[nonlin_type]
-
-        with tf.variable_scope(type(self).__name__) as scope:
-            # Observation normalization
-            ob_mean = tf.get_variable(
-                'ob_mean', ob_space.shape, tf.float32, tf.constant_initializer(np.nan), trainable=False)
-            ob_std = tf.get_variable(
-                'ob_std', ob_space.shape, tf.float32, tf.constant_initializer(np.nan), trainable=False)
-            in_mean = tf.placeholder(tf.float32, ob_space.shape)
-            in_std = tf.placeholder(tf.float32, ob_space.shape)
-            self._set_ob_mean_std = U.function([in_mean, in_std], [], updates=[
-                tf.assign(ob_mean, in_mean),
-                tf.assign(ob_std, in_std),
-            ])
-
-            # Policy network
-            # would below work for go?
-            self.x = x = tf.placeholder(tf.float32, [None] + list(ob_space.shape))
-            for ilayer, hd in enumerate(self.hidden_dims):
-                # have filter size = board size (19 x 19)?
-                # decrease dimensionality or nah?
-                x = self.nonlin(U.conv2d(x, hd, "l{}".format(ilayer), [3, 3], [1, 1]))
-            # introduce a "fake" batch dimension of 1 after flatten so that we can do LSTM over time dim
-            x = tf.expand_dims(U.flatten(x), [0])
-
-            lstm = rnn.BasicLSTMCell(self.lstm_size, state_is_tuple=True)
-            step_size = tf.shape(self.x)[:1]
-
-            c_init = np.zeros((1, lstm.state_size.c), np.float32)
-            h_init = np.zeros((1, lstm.state_size.h), np.float32)
-            self.state_init = [c_init, h_init]
-            c_in = tf.placeholder(tf.float32, [1, lstm.state_size.c])
-            h_in = tf.placeholder(tf.float32, [1, lstm.state_size.h])
-            self.state_in = [c_in, h_in]
-
-            state_in = rnn.LSTMStateTuple(c_in, h_in)
-            lstm_outputs, lstm_state = tf.nn.dynamic_rnn(
-                lstm, x, initial_state=state_in, sequence_length=step_size,
-                time_major=False)
-            lstm_c, lstm_h = lstm_state
-            x = tf.reshape(lstm_outputs, [-1, self.lstm_size])
-            self.logits = U.dense(x, self.ac_space.n, 'action', U.normc_initializer(0.01))
-            self.state_out = [lstm_c[:1, :], lstm_h[:1, :]]
-            self.sample = U.categorical_sample(self.logits, self.ac_space.n)[0, :]
-
-        return scope
-
-    def get_initial_features(self):
-        return self.state_init
-
-    def act(self, ob, c0, h0, random_stream=None):
-        sess = U.get_session()
-        a, c1, h1 = sess.run([self.sample] + self.state_out,
-                             {self.x: [ob], self.state_in[0]: c0, self.state_in[1]: h0})
-        if random_stream is not None and self.ac_noise_std != 0:
-            a += random_stream.randn(*a.shape) * self.ac_noise_std
-        return a, c1, h1
-
-    def rollout(self, env, render=False, save_obs=False, random_stream=None):
-        """
-        If random_stream is provided, the rollout will take noisy actions with noise drawn from that stream.
-        Otherwise, no action noise will be added.
-        """
-        rews = []
-        t = 0
-        if save_obs:
-            obs = []
-        last_ob = env.reset()
-        last_features = self.get_initial_features()
-        while True:
-            fetched = self.act(last_ob, *last_features, random_stream=random_stream)
-            ac, last_features = fetched[0], fetched[1:]
-            if save_obs:
-                obs.append(last_ob)
-            #ac = ac.argmax()
-            ac = np.random.choice(np.arange(len(ac)), p=ac)  # is it a softmax vector?
-            last_ob, rew, done, _ = env.step(ac.argmax())
-            rews.append(rew)
-            t += 1
-            if render:
-                env.render()
-            if np.abs(rew) == 1:  # helps avoid weird reward 0 bug
-                break
-        rews = np.array(rews, dtype=np.float32)
-        if save_obs:
-            return rews, t, np.array(obs)
-        return rews, t
-
-    @property
-    def needs_ob_stat(self):   # necessary for GoEnv?
-        return True
-
-    @property
-    def needs_ref_batch(self):   # necessary for GoEnv?
-        return False
-
-    def set_ob_stat(self, ob_mean, ob_std):
-        self._set_ob_mean_std(ob_mean, ob_std)
-
-    #def initialize_from(self, filename, ob_stat=None):
+# class GoPolicy(Policy):
+#     # ob_space = Box(3, 19, 19)
+#     # ac_space = Discrete(363)   19*19 + 2
+#     def _initialize(self, ob_space, ac_space, ac_noise_std, nonlin_type, hidden_dims, lstm_size):
+#         self.ac_space = ac_space
+#         self.ac_noise_std = ac_noise_std
+#         self.hidden_dims = hidden_dims
+#         self.lstm_size = lstm_size
+#
+#         self.nonlin = {'tanh': tf.tanh, 'relu': tf.nn.relu, 'lrelu': U.lrelu, 'elu': tf.nn.elu}[nonlin_type]
+#
+#         with tf.variable_scope(type(self).__name__) as scope:
+#             # Observation normalization
+#             ob_mean = tf.get_variable(
+#                 'ob_mean', ob_space.shape, tf.float32, tf.constant_initializer(np.nan), trainable=False)
+#             ob_std = tf.get_variable(
+#                 'ob_std', ob_space.shape, tf.float32, tf.constant_initializer(np.nan), trainable=False)
+#             in_mean = tf.placeholder(tf.float32, ob_space.shape)
+#             in_std = tf.placeholder(tf.float32, ob_space.shape)
+#             self._set_ob_mean_std = U.function([in_mean, in_std], [], updates=[
+#                 tf.assign(ob_mean, in_mean),
+#                 tf.assign(ob_std, in_std),
+#             ])
+#
+#             # Policy network
+#             # would below work for go?
+#             self.x = x = tf.placeholder(tf.float32, [None] + list(ob_space.shape))
+#             for ilayer, hd in enumerate(self.hidden_dims):
+#                 # have filter size = board size (19 x 19)?
+#                 # decrease dimensionality or nah?
+#                 x = self.nonlin(U.conv2d(x, hd, "l{}".format(ilayer), [3, 3], [1, 1]))
+#             # introduce a "fake" batch dimension of 1 after flatten so that we can do LSTM over time dim
+#             x = tf.expand_dims(U.flatten(x), [0])
+#
+#             lstm = rnn.BasicLSTMCell(self.lstm_size, state_is_tuple=True)
+#             step_size = tf.shape(self.x)[:1]
+#
+#             c_init = np.zeros((1, lstm.state_size.c), np.float32)
+#             h_init = np.zeros((1, lstm.state_size.h), np.float32)
+#             self.state_init = [c_init, h_init]
+#             c_in = tf.placeholder(tf.float32, [1, lstm.state_size.c])
+#             h_in = tf.placeholder(tf.float32, [1, lstm.state_size.h])
+#             self.state_in = [c_in, h_in]
+#
+#             state_in = rnn.LSTMStateTuple(c_in, h_in)
+#             lstm_outputs, lstm_state = tf.nn.dynamic_rnn(
+#                 lstm, x, initial_state=state_in, sequence_length=step_size,
+#                 time_major=False)
+#             lstm_c, lstm_h = lstm_state
+#             x = tf.reshape(lstm_outputs, [-1, self.lstm_size])
+#             self.logits = U.dense(x, self.ac_space.n, 'action', U.normc_initializer(0.01))
+#             self.state_out = [lstm_c[:1, :], lstm_h[:1, :]]
+#             self.sample = U.categorical_sample(self.logits, self.ac_space.n)[0, :]
+#
+#         return scope
+#
+#     def get_initial_features(self):
+#         return self.state_init
+#
+#     def act(self, ob, c0, h0, random_stream=None):
+#         sess = U.get_session()
+#         a, c1, h1 = sess.run([self.sample] + self.state_out,
+#                              {self.x: [ob], self.state_in[0]: c0, self.state_in[1]: h0})
+#         if random_stream is not None and self.ac_noise_std != 0:
+#             a += random_stream.randn(*a.shape) * self.ac_noise_std
+#         return a, c1, h1
+#
+#     def rollout(self, env, render=False, save_obs=False, random_stream=None):
+#         """
+#         If random_stream is provided, the rollout will take noisy actions with noise drawn from that stream.
+#         Otherwise, no action noise will be added.
+#         """
+#         rews = []
+#         t = 0
+#         if save_obs:
+#             obs = []
+#         last_ob = env.reset()
+#         last_features = self.get_initial_features()
+#         while True:
+#             fetched = self.act(last_ob, *last_features, random_stream=random_stream)
+#             ac, last_features = fetched[0], fetched[1:]
+#             if save_obs:
+#                 obs.append(last_ob)
+#             #ac = ac.argmax()
+#             ac = np.random.choice(np.arange(len(ac)), p=ac)  # is it a softmax vector?
+#             last_ob, rew, done, _ = env.step(ac.argmax())
+#             rews.append(rew)
+#             t += 1
+#             if render:
+#                 env.render()
+#             if np.abs(rew) == 1:  # helps avoid weird reward 0 bug
+#                 break
+#         rews = np.array(rews, dtype=np.float32)
+#         if save_obs:
+#             return rews, t, np.array(obs)
+#         return rews, t
+#
+#     @property
+#     def needs_ob_stat(self):   # necessary for GoEnv?
+#         return True
+#
+#     @property
+#     def needs_ref_batch(self):   # necessary for GoEnv?
+#         return False
+#
+#     def set_ob_stat(self, ob_mean, ob_std):
+#         self._set_ob_mean_std(ob_mean, ob_std)
+#
+#     #def initialize_from(self, filename, ob_stat=None):
 
 
 class PartialRollout(object):
@@ -271,29 +273,40 @@ class PartialRollout(object):
 class AtariPolicy(Policy):
     # ob_space = Box(210, 160, 3)  # pixels most likely
     # ac_space = Discrete(6)
-    def _initialize(self, ob_space, ac_space, ac_noise_std, nonlin_type, hidden_dims, lstm_size):
-        self.ac_space = ac_space
+    def _initialize(self, ob_space, ac_space, limit, ac_noise_std, nonlin_type, hidden_dims, lstm_size):
+        self.ob_space = Box(0.0, 1.0, [42, 42, 1])  # preprocessing
+        # self.ac_space = ac_space
+        if limit:
+            self.ac_space = Discrete(4)
+        else:
+            self.ac_space = ac_space
         self.ac_noise_std = ac_noise_std
         self.hidden_dims = hidden_dims
         self.lstm_size = lstm_size
+        self.sp = StateProcessor()
 
         self.nonlin = {'tanh': tf.tanh, 'relu': tf.nn.relu, 'lrelu': U.lrelu, 'elu': tf.nn.elu}[nonlin_type]
 
         with tf.variable_scope(type(self).__name__) as scope:
-            # Observation normalization  <-- where is the actual normalization occurring?
+            # Observation normalization
             ob_mean = tf.get_variable(
-                'ob_mean', ob_space.shape, tf.float32, tf.constant_initializer(np.nan), trainable=False)
+                # 'ob_mean', ob_space.shape, tf.float32, tf.constant_initializer(np.nan), trainable=False)
+                'ob_mean', self.ob_space.shape, tf.float32, tf.constant_initializer(np.nan), trainable=False)
             ob_std = tf.get_variable(
-                'ob_std', ob_space.shape, tf.float32, tf.constant_initializer(np.nan), trainable=False)
-            in_mean = tf.placeholder(tf.float32, ob_space.shape)
-            in_std = tf.placeholder(tf.float32, ob_space.shape)
+                # 'ob_std', ob_space.shape, tf.float32, tf.constant_initializer(np.nan), trainable=False)
+                'ob_std', self.ob_space.shape, tf.float32, tf.constant_initializer(np.nan), trainable=False)
+            # in_mean = tf.placeholder(tf.float32, ob_space.shape)
+            in_mean = tf.placeholder(tf.float32, self.ob_space.shape)
+            # in_std = tf.placeholder(tf.float32, ob_space.shape)
+            in_std = tf.placeholder(tf.float32, self.ob_space.shape)
             self._set_ob_mean_std = U.function([in_mean, in_std], [], updates=[
                 tf.assign(ob_mean, in_mean),
                 tf.assign(ob_std, in_std),
             ])
 
             # Policy network
-            self.x = x = tf.placeholder(tf.float32, [None] + list(ob_space.shape))
+            # self.x = x = tf.placeholder(tf.float32, [None] + list(ob_space.shape))
+            self.x = x = tf.placeholder(tf.float32, [None] + list(self.ob_space.shape))
             for ilayer, hd in enumerate(self.hidden_dims):
                 x = self.nonlin(U.conv2d(x, hd, 'l{}'.format(ilayer), [3, 3], [2, 2]))
             # introduce a "fake" batch dimension of 1 after flatten so that we can do LSTM over time dim
@@ -336,7 +349,7 @@ class AtariPolicy(Policy):
             if random_stream is not None and self.ac_noise_std != 0:
                 a += random_stream.randn(*a.shape) * self.ac_noise_std
             return a, v_, c1, h1
-        else: # softmax
+        else:  # softmax
             # don't want random_stream with softmax
             return sess.run([self.ac_probs, self.vf] + self.state_out,
                                  {self.x: [ob], self.state_in[0]: c0, self.state_in[1]: h0})
@@ -354,7 +367,8 @@ class AtariPolicy(Policy):
         t = 0
         if save_obs:
             obs = []
-        last_ob = env.reset()
+        # last_ob = env.reset()
+        last_ob = self.sp.process(env.reset())
         last_features = self.get_initial_features()
         while True:
             fetched = self.act(last_ob, *last_features, random_stream=random_stream, one_hot=one_hot)
@@ -365,7 +379,8 @@ class AtariPolicy(Policy):
                 ac = ac.argmax()  # want argmax when using one-hot and random_stream
             else:
                 ac = np.random.choice(np.arange(len(ac)), p=ac)  # when using action probs
-            last_ob, rew, done, _ = env.step(ac)
+            ob, rew, done, _ = env.step(ac)
+            last_ob = self.sp.process(ob)
             rews.append(rew)
             t += 1
             if render:
@@ -380,7 +395,8 @@ class AtariPolicy(Policy):
     def env_runner(self, env, num_local_steps=20, render=False, random_stream=None, one_hot=True):
         length = 0
         rewards = 0
-        last_state = env.reset()
+        # last_state = env.reset()
+        last_state = self.sp.process(env.reset())
         last_features = self.get_initial_features()
         while True:
             terminal_end = False
@@ -393,7 +409,7 @@ class AtariPolicy(Policy):
                     ac = action.argmax()  # want argmax when using one-hot and random_stream
                 else:
                     ac = np.random.choice(np.arange(len(action)), p=action)  # when using action probs
-                state, reward, terminal, info = env.step(ac)
+                state, reward, terminal, _ = env.step(ac)
                 if render:
                     env.render()
 
@@ -402,18 +418,17 @@ class AtariPolicy(Policy):
                 length += 1
                 rewards += reward
 
-                last_state = state
+                # last_state = state
+                last_state = self.sp.process(state)
                 last_features = features
-
-                # if info:  # for tf summary writing, if want to implement
 
                 timestep_limit = env.spec.tags.get('wrapper_config.TimeLimit.max_episode_steps')
                 if terminal or length >= timestep_limit:
                     terminal_end = True
                     if length >= timestep_limit or not env.metadata.get('semantics.autoreset'):
-                        last_state = env.reset()
+                        # last_state = env.reset()
+                        last_state = self.sp.process(env.reset())
                     last_features = self.get_initial_features()
-                    # print("Episode finished. Sum of rewards: %d. Length: %d" % (rewards, length))
                     length = 0
                     rewards = 0
                     break
@@ -425,8 +440,8 @@ class AtariPolicy(Policy):
             yield rollout
 
     @property
-    def needs_ob_stat(self):   # necessary?
-        return True
+    def needs_ob_stat(self):   # necessary? if doing preprocessing, shouldn't be?
+        return False
 
     @property
     def needs_ref_batch(self):   # necessary?
