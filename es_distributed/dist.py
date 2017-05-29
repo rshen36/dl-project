@@ -143,7 +143,7 @@ class RelayClient:
                 last_print_time = curr_time
 
     def _declare_task_local(self, task_id, task_data):
-        logger.info('[relay] Received task {}'.format(task_id))
+        # logger.info('[relay] Received task {}'.format(task_id))
         self.local_redis.mset({TASK_ID_KEY: task_id, TASK_DATA_KEY: task_data})
 
 

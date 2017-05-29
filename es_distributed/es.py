@@ -326,8 +326,8 @@ def run_master(master_redis_cfg, log_dir, exp):
             # ob_count_this_batch = 0
 
             # based on experimental results that es requires about 3-10 times as much data as a3c
-            eps_per_batch = config.episodes_per_batch / 10
-            tsteps_per_batch = config.timesteps_per_batch / 10
+            eps_per_batch = config.episodes_per_batch / 5
+            tsteps_per_batch = config.timesteps_per_batch / 5
             # while num_updates_popped < ups_per_batch or num_timesteps_popped < tsteps_per_batch:
             while num_episodes_popped < eps_per_batch or num_timesteps_popped < tsteps_per_batch:
                 # Wait for a result
@@ -551,7 +551,7 @@ def run_worker(relay_redis_cfg, noise, min_task_runtime=1.):  # what should min_
                     ob_count=task_ob_stat.count
                 ))
         else:  # A3C worker step
-            if rs.rand() < config.eval_prob * 3:
+            if rs.rand() < config.eval_prob * 5:
                 # Evaluation: noiseless weights and noiseless actions
                 policy.set_trainable_flat(task_data.params)
                 eval_rews, eval_length = policy.rollout(env, one_hot=config.one_hot)
