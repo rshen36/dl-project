@@ -433,7 +433,7 @@ def run_master(master_redis_cfg, log_dir, exp):
 
         if curr_task_id % config.switch_freq == 0:
             # want exponentially decreasing probability? make this a hyperparameter if so?
-            es_a3c = rs.rand() < np.power(config.es_a3c_prob, curr_task_id)
+            es_a3c = rs.rand() < np.power(config.es_a3c_prob, (curr_task_id / config.switch_freq))
 
 
 def rollout_and_update_ob_stat(policy, env, rs, task_ob_stat, calc_obstat_prob, one_hot=True):
