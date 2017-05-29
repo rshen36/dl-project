@@ -11,16 +11,16 @@ class StateProcessor():
         # Build the Tensorflow graph
         with tf.variable_scope("state_processor"):
             self.input_state = tf.placeholder(shape=[210, 160, 3], dtype=tf.uint8)
-            self.output = tf.image.rgb_to_grayscale(self.input_state)
+            # self.output = tf.image.rgb_to_grayscale(self.input_state)
             # edited output sizes to match with universe-starter-agent preprocessing
-            self.output = tf.image.crop_to_bounding_box(self.output, 34, 0, 160, 160)
+            self.output = tf.image.crop_to_bounding_box(self.input_state, 34, 0, 160, 160)
             self.output = tf.image.resize_images(
                 self.output, [80, 80], method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
             self.output = tf.image.resize_images(
                 self.output, [42, 42], method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
-            # self.output = tf.reduce_mean(self.output, reduction_indices=[2])
-            # self.output = tf.cast(self.output, tf.float32)
-            # self.output *= (1.0 / 255.0)
+            self.output = tf.reduce_mean(self.output, reduction_indices=[2])
+            self.output = tf.cast(self.output, tf.float32)
+            self.output *= (1.0 / 255.0)
             self.output = tf.reshape(self.output, [42, 42, 1])
             # self.output = tf.expand_dims(self.output, [0])
 

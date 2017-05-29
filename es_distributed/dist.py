@@ -12,7 +12,7 @@ except ImportError:
 
 import redis
 
-logging.basicConfig(filename='experiment.log',level=logging.INFO)
+logging.basicConfig(filename='experiment.log', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 EXP_KEY = 'es:exp'
@@ -86,6 +86,17 @@ class MasterClient:
          .publish(TASK_CHANNEL, serialize((task_id, serialized_task_data)))
          .execute())   # TODO: can we avoid transferring task data twice and serializing so much?
         logger.debug('[master] Declared task {}'.format(task_id))
+        return task_id
+
+    def declare_params(self, params):  # for A3C
+        # don't want to increment the task
+        task_id = self.task_counter
+
+        serialized_params = serialize(params)
+        (self.master_redis.pipeline()
+         .mset({TASK_ID_KEY: task_id, TASK_DATA_KEY: serialized_params})
+         .publish(TASK_CHANNEL, serialize((task_id, serialized_params)))
+         .execute())   # TODO: can we avoid transferring task data twice and serializing so much?
         return task_id
 
     def pop_result(self):

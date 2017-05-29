@@ -164,8 +164,8 @@ def setup(exp, single_threaded):
 
     config = Config(**exp['config'])
     env = gym.make(exp['env_id'])
-    if exp['env_id'] == "Pong-v0" or exp['env_id'] == "Breakout-v0":  # recommendation from Denny Britz
-        limit = True
+    # if exp['env_id'] == "Pong-v0" or exp['env_id'] == "Breakout-v0":  # recommendation from Denny Britz
+    #     limit = True
     sess = make_session(single_threaded=single_threaded)
     policy = getattr(policies, exp['policy']['type'])(env.observation_space,
                                                       env.action_space, limit, **exp['policy']['args'])
@@ -367,6 +367,15 @@ def run_master(master_redis_cfg, log_dir, exp):
 
                     # asynchronous updates from each worker? too many overwrites? better way?
                     policy.set_trainable_flat(f.params)
+                    theta_ = policy.get_trainable_flat()
+                    t_id = master.declare_params(Task(  # broadcast updated parameters
+                        params=theta_,
+                        ob_mean=ob_stat.mean if policy.needs_ob_stat else None,
+                        ob_std=ob_stat.std if policy.needs_ob_stat else None,
+                        a3c=a3c
+                    ))
+                    assert t_id == (curr_task_id + 1)
+
 
             # Compute skip fraction
             frac_updates_skipped = num_updates_skipped / (num_updates_skipped + num_updates_popped)
@@ -464,7 +473,6 @@ def run_worker(relay_redis_cfg, noise, min_task_runtime=1.):  # what should min_
     bs = tf.to_float(tf.shape(policy.x)[0])  # batch size
     loss = pi_loss + 0.5 * vf_loss - entropy * 0.01
 
-    # matters not inputting master variables?
     grads = tf.gradients(loss, policy.trainable_variables)
     grads, _ = tf.clip_by_global_norm(grads, 40.0)  # why 40.0?
     grads = tf.concat([tf.reshape(grad, [U.numel(v)]) for (v, grad)

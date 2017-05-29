@@ -274,7 +274,7 @@ class AtariPolicy(Policy):
     # ob_space = Box(210, 160, 3)  # pixels most likely
     # ac_space = Discrete(6)
     def _initialize(self, ob_space, ac_space, limit, ac_noise_std, nonlin_type, hidden_dims, lstm_size):
-        self.ob_space = Box(0.0, 255.0, [42, 42, 1])  # preprocessing
+        self.ob_space = Box(0.0, 1.0, [42, 42, 1])  # preprocessing
         # self.ac_space = ac_space
         if limit:
             self.ac_space = Discrete(4)
