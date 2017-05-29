@@ -325,10 +325,8 @@ def run_master(master_redis_cfg, log_dir, exp):
             num_episodes_popped, num_updates_skipped, num_updates_popped, num_timesteps_popped = 0, 0, 0, 0
             # ob_count_this_batch = 0
 
-            ups_per_batch = config.episodes_per_batch / 20
-            tsteps_per_batch = config.timesteps_per_batch / 20
-            # while num_episodes_popped < eps_per_batch or num_timesteps_popped < tsteps_per_batch:
-            while num_updates_popped < ups_per_batch or num_timesteps_popped < tsteps_per_batch:
+            # while num_updates_popped < ups_per_batch or num_timesteps_popped < tsteps_per_batch:
+            while num_episodes_popped < config.episodes_per_batch or num_timesteps_popped < config.timesteps_per_batch:
                 # Wait for a result
                 task_id, f = master.pop_result()
                 assert isinstance(task_id, int) and isinstance(f, Fetched)
@@ -540,7 +538,7 @@ def run_worker(relay_redis_cfg, noise, min_task_runtime=1.):  # what should min_
                     ob_count=task_ob_stat.count
                 ))
         else:  # A3C worker step
-            if rs.rand() < config.eval_prob * 5:  # TODO: do this better
+            if rs.rand() < config.eval_prob:
                 # Evaluation: noiseless weights and noiseless actions
                 policy.set_trainable_flat(task_data.params)
                 eval_rews, eval_length = policy.rollout(env, one_hot=config.one_hot)
