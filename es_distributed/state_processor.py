@@ -13,7 +13,7 @@ class StateProcessor():
             self.input_state = tf.placeholder(shape=[210, 160, 3], dtype=tf.uint8)
             self.output = tf.image.rgb_to_grayscale(self.input_state)
             # edited output sizes to match with universe-starter-agent preprocessing
-            self.output = tf.image.crop_to_bounding_box(self.input_state, 34, 0, 160, 160)
+            self.output = tf.image.crop_to_bounding_box(self.output, 34, 0, 160, 160)
             self.output = tf.image.resize_images(
                 self.output, [80, 80], method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
             self.output = tf.image.resize_images(
